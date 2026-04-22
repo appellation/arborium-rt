@@ -21,7 +21,7 @@ export const ABI_VERSION = 1;
 export interface HostModule {
     /** Load a SIDE_MODULE wasm into the host; returns its exports. */
     loadWebAssemblyModule(
-        bytes: ArrayBuffer | Uint8Array,
+        binary: ArrayBuffer | Uint8Array | WebAssembly.Module,
         options: { loadAsync: true },
     ): Promise<Record<string, (...args: number[]) => number | void>>;
     /** Allocate `n` bytes in the shared linear heap. */
@@ -140,29 +140,38 @@ export function readUtf8(module: HostModule, ptr: number, len: number): string {
 }
 
 /**
- * Bytes that can be turned into a `Uint8Array`. Accepts common wasm-loading
- * shapes so callers can `fetch()`, `fs.readFile()`, or hand over a URL
- * without ceremony. `URL` is resolved via `fetch` (browser/http) or
- * `fs.readFile` (Node `file:`) inside {@link resolveWasm}.
+ * A source for a SIDE_MODULE wasm. Accepts common wasm-loading shapes so
+ * callers can `fetch()`, `fs.readFile()`, hand over a URL, or pass an
+ * already-compiled `WebAssembly.Module`. `URL` and `Response` flow through
+ * `WebAssembly.compileStreaming` inside {@link resolveWasm} (with `file:`
+ * URLs falling back to `fs.readFile` under Node).
  */
 export type WasmSource =
     | ArrayBuffer
     | Uint8Array
     | Response
     | URL
-    | Promise<ArrayBuffer | Uint8Array | Response | URL>;
+    | WebAssembly.Module
+    | Promise<ArrayBuffer | Uint8Array | Response | URL | WebAssembly.Module>;
 
-/** Resolve a `WasmSource` to a `Uint8Array` suitable for `loadWebAssemblyModule`. */
-export async function resolveWasm(source: WasmSource): Promise<Uint8Array> {
+/**
+ * Resolve a {@link WasmSource} to something `loadWebAssemblyModule` accepts:
+ * either raw bytes (caller handed us bytes) or a `WebAssembly.Module`
+ * (streaming-compiled from a `Response` / `URL`, so compile overlaps the
+ * download).
+ */
+export async function resolveWasm(
+    source: WasmSource,
+): Promise<Uint8Array | WebAssembly.Module> {
     const resolved = await source;
+    if (resolved instanceof WebAssembly.Module) return resolved;
     if (resolved instanceof URL) return resolveUrl(resolved);
+    if (resolved instanceof Response) return compileResponse(resolved, resolved.url || 'wasm response');
     if (resolved instanceof Uint8Array) return resolved;
-    if (resolved instanceof ArrayBuffer) return new Uint8Array(resolved);
-    // Response
-    return new Uint8Array(await resolved.arrayBuffer());
+    return new Uint8Array(resolved);
 }
 
-async function resolveUrl(url: URL): Promise<Uint8Array> {
+async function resolveUrl(url: URL): Promise<Uint8Array | WebAssembly.Module> {
     if (url.protocol === 'file:') {
         // `fetch(file:)` is unsupported in Node's global fetch as of v22; the
         // generated grammar packages always emit `new URL('./x.wasm',
@@ -182,7 +191,26 @@ async function resolveUrl(url: URL): Promise<Uint8Array> {
             `failed to fetch ${url.href}: ${response.status} ${response.statusText}`,
         );
     }
-    return new Uint8Array(await response.arrayBuffer());
+    return compileResponse(response, url.href);
+}
+
+async function compileResponse(
+    response: Response,
+    label: string,
+): Promise<WebAssembly.Module> {
+    try {
+        return await WebAssembly.compileStreaming(Promise.resolve(response));
+    } catch (err) {
+        // `compileStreaming` rejects if the body MIME type isn't
+        // `application/wasm`. The response body has already been consumed,
+        // so we can't fall back to a buffered compile here — surface the
+        // failure with context so the caller can fix the server config or
+        // pre-buffer themselves.
+        throw new ArboriumError(
+            'wasm-fetch-failed',
+            `WebAssembly.compileStreaming failed for ${label}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+    }
 }
 
 const encoder = /* @__PURE__ */ new TextEncoder();
