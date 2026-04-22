@@ -1,0 +1,107 @@
+From 549ceedbd062ce48d17a59aa95cda07983eafb99 Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Tue, 21 Apr 2026 17:06:52 +0000
+Subject: [PATCH] Gate static tree-sitter linking off on
+ wasm32-unknown-emscripten
+
+Three target-gated edits that allow arborium's Rust crates to be built for
+wasm32-unknown-emscripten as SIDE_MODULE=2 wasm, where the tree-sitter C
+runtime is resolved at load time from a MAIN_MODULE (web-tree-sitter) rather
+than statically linked.
+
+- arborium-tree-sitter/binding_rust/build.rs: early-return before the
+  cc::Build step when TARGET is wasm32-unknown-emscripten. Still copies
+  stdlib-symbols.txt into OUT_DIR (binding_rust/lib.rs unconditionally
+  include_str!'s it) and emits cargo:include.
+- arborium-sysroot/build.rs: narrow the wasm-allocator compile gate so it
+  excludes emscripten (emcc provides libc; duplicate malloc/free on link).
+- arborium-sysroot/src/lib.rs: narrow the `cfg(target_family = "wasm")`
+  gates on `mod wasm` and `pub use wasm::*;` to exclude emscripten, for
+  the same reason.
+
+All non-emscripten targets are unaffected: wasm32-unknown-unknown and
+native builds execute the same code paths as before.
+
+This is the minimal foundation required for a new
+arborium-emscripten-runtime crate (added in a follow-up commit) to
+compile as a SIDE_MODULE. No public APIs change. No grammar crates are
+touched. No CI changes.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+---
+ crates/arborium-sysroot/build.rs               |  7 +++++--
+ crates/arborium-sysroot/src/lib.rs             |  8 +++++---
+ .../arborium-tree-sitter/binding_rust/build.rs | 18 ++++++++++++++++++
+ 3 files changed, 28 insertions(+), 5 deletions(-)
+
+diff --git a/crates/arborium-sysroot/build.rs b/crates/arborium-sysroot/build.rs
+index 571756c..364f177 100644
+--- a/crates/arborium-sysroot/build.rs
++++ b/crates/arborium-sysroot/build.rs
+@@ -8,9 +8,12 @@ fn main() {
+     // Emit metadata that dependent crates can access via DEP_ARBORIUM_SYSROOT_PATH
+     println!("cargo::metadata=PATH={}", wasm_sysroot.display());
+ 
+-    // For WASM targets, compile the allocator C code
++    // For WASM targets, compile the allocator C code.
++    // Skip on wasm32-unknown-emscripten: emcc provides its own libc
++    // (malloc/free/...) and compiling these sources on that target produces
++    // duplicate-symbol link errors.
+     let target = std::env::var("TARGET").unwrap_or_default();
+-    if target.contains("wasm") {
++    if target.contains("wasm") && target != "wasm32-unknown-emscripten" {
+         // Compile the C source files that provide the missing symbols
+         let mut build = cc::Build::new();
+ 
+diff --git a/crates/arborium-sysroot/src/lib.rs b/crates/arborium-sysroot/src/lib.rs
+index 05629ae..8d069e8 100644
+--- a/crates/arborium-sysroot/src/lib.rs
++++ b/crates/arborium-sysroot/src/lib.rs
+@@ -2,10 +2,12 @@
+ // via the DEP_ARBORIUM_SYSROOT_PATH environment variable set by build.rs,
+ // and includes WASM allocator implementations for browser compatibility.
+ 
+-// Include the WASM allocator module when targeting WASM
+-#[cfg(target_family = "wasm")]
++// Include the WASM allocator module when targeting WASM, but not for
++// emscripten: emcc ships its own libc, so defining our own malloc/free
++// here would produce duplicate-symbol link errors.
++#[cfg(all(target_family = "wasm", not(target_os = "emscripten")))]
+ mod wasm;
+ 
+ // Re-export allocator symbols for external crates
+-#[cfg(target_family = "wasm")]
++#[cfg(all(target_family = "wasm", not(target_os = "emscripten")))]
+ pub use wasm::*;
+diff --git a/crates/arborium-tree-sitter/binding_rust/build.rs b/crates/arborium-tree-sitter/binding_rust/build.rs
+index cca5a44..24b762c 100644
+--- a/crates/arborium-tree-sitter/binding_rust/build.rs
++++ b/crates/arborium-tree-sitter/binding_rust/build.rs
+@@ -4,6 +4,24 @@ fn main() {
+     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+     let target = env::var("TARGET").unwrap();
+ 
++    // On wasm32-unknown-emscripten the crate is consumed by an emscripten
++    // SIDE_MODULE build; `ts_*` symbols are resolved at runtime by the
++    // MAIN_MODULE (web-tree-sitter). Skip the static cc::Build step so we
++    // don't ship duplicate tree-sitter code, but still copy
++    // stdlib-symbols.txt into OUT_DIR (binding_rust/lib.rs `include_str!`s
++    // it unconditionally) and emit cargo:include for
++    // DEP_TREE_SITTER_INCLUDE consumers.
++    if target == "wasm32-unknown-emscripten" {
++        let manifest_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
++        fs::copy(
++            "src/wasm/stdlib-symbols.txt",
++            out_dir.join("stdlib-symbols.txt"),
++        )
++        .unwrap();
++        println!("cargo:include={}", manifest_path.join("include").display());
++        return;
++    }
++
+     #[cfg(feature = "bindgen")]
+     generate_bindings(&out_dir);
+ 
+-- 
+2.34.1
+

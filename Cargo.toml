@@ -1,0 +1,22 @@
+[package]
+name = "arborium-emscripten-runtime"
+version = "0.1.0"
+edition = "2024"
+description = "Shared arborium plugin runtime packaged as an emscripten SIDE_MODULE"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+arborium-plugin-runtime = { path = "third_party/arborium/crates/arborium-plugin-runtime" }
+arborium-tree-sitter    = { path = "third_party/arborium/crates/arborium-tree-sitter" }
+arborium-wire           = { path = "third_party/arborium/crates/arborium-wire" }
+serde_json              = { version = "1.0", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = "z"
+lto = false
+codegen-units = 1
+panic = "abort"
+strip = false
