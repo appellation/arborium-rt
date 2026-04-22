@@ -20,6 +20,13 @@
     "./host-wasm": "./dist/host/web-tree-sitter.wasm",
     "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm"
   },
+  "imports": {
+    "#wasm-loader": {
+      "types": "./dist/wasm-loader.d.ts",
+      "browser": "./dist/wasm-loader.browser.js",
+      "default": "./dist/wasm-loader.js"
+    }
+  },
   "files": [
     "dist"
   ],

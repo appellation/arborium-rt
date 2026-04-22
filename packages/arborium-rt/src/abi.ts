@@ -8,6 +8,8 @@
 
 /// <reference types="emscripten" />
 
+import { readLocalWasm } from '#wasm-loader';
+
 /**
  * The MAIN_MODULE host surface. Extends the upstream `EmscriptenModule`
  * interface with the two bits we rely on that aren't part of the base type:
@@ -177,18 +179,12 @@ export async function resolveWasm(source: WasmSource): Promise<Uint8Array> {
 }
 
 async function fetchWasm(url: URL): Promise<Uint8Array> {
-    if (url.protocol === 'file:') {
-        // `fetch(file:)` is unsupported in Node's global fetch as of v22; the
-        // generated grammar packages always emit `new URL('./x.wasm',
-        // import.meta.url)`, which is `file:` under Node and `http(s):` in
-        // browsers. Gate the fs import so bundlers can skip it — only
-        // executed when a file: URL is actually encountered.
-        const { readFile } = await import(
-            /* @vite-ignore */ /* webpackIgnore: true */ 'node:fs/promises'
-        );
-        const buf = await readFile(url);
-        return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-    }
+    // `readLocalWasm` returns bytes for `file:` URLs under Node and `null`
+    // otherwise. The browser variant of `#wasm-loader` (selected by the
+    // `"browser"` condition in package.json's `imports` field) always
+    // returns `null`, so `node:fs/promises` never lands in a browser build.
+    const local = await readLocalWasm(url);
+    if (local) return local;
     const response = await fetch(url);
     if (!response.ok) {
         throw new ArboriumError(
