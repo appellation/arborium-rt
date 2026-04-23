@@ -1,5 +1,5 @@
 {
-  "name": "@appellation/arborium-rt",
+  "name": "@discord/arborium-rt",
   "version": "0.1.0",
   "description": "Dynamically-linked tree-sitter + arborium runtime for the browser",
   "license": "MIT",
@@ -7,9 +7,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/appellation/arborium-rt.git"
-  },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
   },
   "exports": {
     ".": {
@@ -36,7 +33,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "pretest": "node ../arborium-rt-cli/dist/main.js package-all --only json && tsc && node ../arborium-rt-cli/dist/main.js stage-dist",
+    "pretest": "../../scripts/arborium-rt package-all --only json && tsc && ../../scripts/arborium-rt stage-dist",
     "test": "vitest run"
   },
   "devDependencies": {

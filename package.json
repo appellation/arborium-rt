@@ -8,7 +8,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "cli": "node packages/arborium-rt-cli/dist/main.js"
+    "cli": "./scripts/arborium-rt"
   },
   "packageManager": "pnpm@9.12.2"
 }

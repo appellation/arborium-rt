@@ -1,4 +1,4 @@
-# @appellation/arborium-rt
+# @discord/arborium-rt
 
 TypeScript package that dynamically links tree-sitter, arborium, and per-grammar
 parser tables in the browser so each pays for itself exactly once.
@@ -9,7 +9,7 @@ usage.
 ## Install
 
 ```sh
-npm install @appellation/arborium-rt
+npm install @discord/arborium-rt
 ```
 
 The package ships three wasm/mjs assets alongside its compiled JS:
@@ -20,7 +20,7 @@ SIDE_MODULEs import) and `dist/runtime/arborium_emscripten_runtime.wasm`.
 ## Usage
 
 ```ts
-import { loadArboriumRuntime } from '@appellation/arborium-rt';
+import { loadArboriumRuntime } from '@discord/arborium-rt';
 
 const runtime = await loadArboriumRuntime();
 
@@ -70,12 +70,12 @@ Type exports (`Utf16Span`, `Utf16Injection`, `Utf16ParseResult`, `Edit`,
 
 ## Grammar source
 
-Grammars ship as separate packages (`@appellation/arborium-rt-<lang>`) whose default
+Grammars ship as separate packages (`@discord/arborium-rt-<lang>`) whose default
 export is an `ArboriumGrammarPackage`. The object is structurally
 assignable to `loadGrammar`'s input, so no glue code is needed:
 
 ```ts
-import jsonGrammar from '@appellation/arborium-rt-json';
+import jsonGrammar from '@discord/arborium-rt-json';
 const grammar = await runtime.loadGrammar(jsonGrammar);
 ```
 
@@ -92,10 +92,6 @@ Each grammar package ships:
 it'll `fetch` for `http(s):` URLs and `fs.readFile` for `file:` URLs under
 Node. Consumers that want to pre-fetch or supply bytes directly can still
 do so.
-
-This package also ships the `arborium-rt` dev CLI (`bin` entry in
-`package.json`) used to build grammars + generate these packages. See
-the repo root for commands: `./scripts/arborium-rt --help`.
 
 ## License
 

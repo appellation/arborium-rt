@@ -47,12 +47,12 @@ through shared linear memory.
 Most consumers should use the typed TypeScript wrapper:
 
 ```sh
-npm install @appellation/arborium-rt
+npm install @discord/arborium-rt
 ```
 
 ```ts
-import { loadArboriumRuntime } from '@appellation/arborium-rt';
-import jsonGrammar from '@appellation/arborium-rt/grammars/json';
+import { loadArboriumRuntime } from '@discord/arborium-rt';
+import jsonGrammar from '@discord/arborium-rt/grammars/json';
 
 const runtime = await loadArboriumRuntime();
 const grammar = await runtime.loadGrammar(jsonGrammar);
@@ -95,12 +95,12 @@ for the full consumer API (`Runtime`, `Grammar`, `Session`,
 
 ## Grammar subpaths
 
-Grammars ship inside the main `@appellation/arborium-rt` tarball and are
+Grammars ship inside the main `@discord/arborium-rt` tarball and are
 imported via subpath exports — one `import` per grammar the consumer wants:
 
 ```ts
-import jsonGrammar from '@appellation/arborium-rt/grammars/json';
-import cssGrammar  from '@appellation/arborium-rt/grammars/css';
+import jsonGrammar from '@discord/arborium-rt/grammars/json';
+import cssGrammar  from '@discord/arborium-rt/grammars/css';
 ```
 
 Each subpath resolves to a tiny ESM module whose default export is
@@ -112,7 +112,7 @@ final bundle, even though node_modules contains the full set.
 Layout inside the package:
 
 ```
-@appellation/arborium-rt/
+@discord/arborium-rt/
 ├── dist/
 │   ├── host/web-tree-sitter.{wasm,mjs}
 │   ├── runtime/arborium_emscripten_runtime.wasm

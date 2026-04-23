@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Forwarding wrapper for the arborium-rt dev CLI. Auto-builds the CLI on
-# first run via pnpm, then forwards all args to the built main.js.
+# Forwarding wrapper for the arborium-rt dev CLI. The CLI is a private,
+# unpublished workspace package — it's run directly from TypeScript source
+# via tsx on every invocation.
 #
 # Usage (from repo root):
 #   ./scripts/arborium-rt <subcommand>          # e.g. bootstrap, build-host, etc.
@@ -12,9 +13,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI_DIR="${REPO_ROOT}/packages/arborium-rt-cli"
 
-if [[ ! -f "${CLI_DIR}/dist/main.js" ]]; then
-    echo "==> first-time CLI setup (pnpm install + build)" >&2
-    (cd "${REPO_ROOT}" && pnpm install --silent && pnpm --filter @appellation/arborium-rt-cli build --silent)
+if [[ ! -x "${CLI_DIR}/node_modules/.bin/tsx" ]]; then
+    echo "==> first-time setup (pnpm install)" >&2
+    (cd "${REPO_ROOT}" && pnpm install --silent)
 fi
 
-exec node "${CLI_DIR}/dist/main.js" "$@"
+exec "${CLI_DIR}/node_modules/.bin/tsx" "${CLI_DIR}/src/main.ts" "$@"

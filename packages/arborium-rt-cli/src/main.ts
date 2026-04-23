@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Unified developer CLI for this repo. Invoked via
-// `pnpm --filter @appellation/arborium-rt-cli cli <subcommand>` during dev,
-// or `arborium-rt <subcommand>` once the package is installed.
+// Unified developer CLI for this repo. The CLI is a private, unpublished
+// workspace package; it's invoked directly from source via tsx through the
+// `./scripts/arborium-rt` wrapper (or `pnpm cli <subcommand>` at the root).
 
 import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
@@ -15,7 +15,6 @@ import { buildPackage } from './build-package.js';
 import { buildGrammarIndex } from './arborium-yaml.js';
 import { QUERY_TYPES, flattenAllIntoDir } from './flatten.js';
 import { packageAll } from './package-all.js';
-import { publishAll } from './publish.js';
 import { stageDist } from './stage-dist.js';
 import { paths, step } from './util.js';
 
@@ -32,7 +31,6 @@ Subcommands:
   package-all [--only a,b,c]         regenerate dist/grammars/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
   stage-dist                         stage built wasms into packages/arborium-rt/dist for publish
-  publish [options]                  pnpm publish the runtime + CLI packages
   --help, -h                         this help text
   --version                          print the CLI version
 
@@ -43,18 +41,10 @@ Examples:
   arborium-rt bootstrap
   arborium-rt build-host
   arborium-rt build group-acorn json
-  arborium-rt publish --dry-run
-  arborium-rt publish --skip-cli
 
-Publish flags:
-  --dry-run                          run \`pnpm publish --dry-run\` only
-  --skip-runtime                     don't publish @appellation/arborium-rt
-  --skip-cli                         don't publish @appellation/arborium-rt-cli
-  --registry <url>                   override npm registry (default: honors
-                                     each package.json's publishConfig.registry,
-                                     which points at https://npm.pkg.github.com)
-  --tag <name>                       npm dist-tag (default "latest")
-  --access public|restricted         pass through to \`pnpm publish --access\`
+Publishing the runtime package is not a CLI subcommand — run
+\`pnpm publish\` directly from packages/arborium-rt/ once build-all +
+stage-dist have populated its dist/ directory.
 `;
 
 async function main(argv: readonly string[]): Promise<number> {
@@ -69,7 +59,6 @@ async function main(argv: readonly string[]): Promise<number> {
         case 'package-all':      return cmdPackageAll(rest);
         case 'flatten-queries':  return cmdFlatten(rest);
         case 'stage-dist':       await stageDist(); return 0;
-        case 'publish':          return cmdPublish(rest);
         case '--help':
         case '-h':
         case undefined:
@@ -142,35 +131,6 @@ async function cmdPackageAll(args: readonly string[]): Promise<number> {
         : undefined;
     const result = await packageAll({
         ...(only && only.length > 0 ? { only } : {}),
-    });
-    return result.failed.length === 0 ? 0 : 1;
-}
-
-async function cmdPublish(args: readonly string[]): Promise<number> {
-    const { values } = parseArgs({
-        args: [...args],
-        allowPositionals: false,
-        options: {
-            'dry-run':       { type: 'boolean', default: false },
-            'skip-runtime': { type: 'boolean', default: false },
-            'skip-cli':     { type: 'boolean', default: false },
-            registry:       { type: 'string' },
-            tag:            { type: 'string' },
-            access:         { type: 'string' },
-        },
-    });
-    const access = values.access as 'public' | 'restricted' | undefined;
-    if (access !== undefined && access !== 'public' && access !== 'restricted') {
-        process.stderr.write(`--access must be "public" or "restricted"\n`);
-        return 1;
-    }
-    const result = await publishAll({
-        dryRun: values['dry-run'] === true,
-        skipRuntime: values['skip-runtime'] === true,
-        skipCli: values['skip-cli'] === true,
-        ...(values.registry ? { registry: values.registry } : {}),
-        ...(values.tag ? { tag: values.tag } : {}),
-        ...(access ? { access } : {}),
     });
     return result.failed.length === 0 ? 0 : 1;
 }

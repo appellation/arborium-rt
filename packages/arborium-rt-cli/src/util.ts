@@ -42,7 +42,7 @@ export interface Paths {
     /**
      * Directory where per-grammar subdirs (index.js / index.d.ts / wasm /
      * .scm) are emitted. Lives inside the runtime package's `dist/` so the
-     * subpath exports (`@appellation/arborium-rt/grammars/<lang>`) resolve
+     * subpath exports (`@discord/arborium-rt/grammars/<lang>`) resolve
      * to a sibling of the compiled TS.
      */
     readonly packagesOut: string;

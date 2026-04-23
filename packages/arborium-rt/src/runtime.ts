@@ -65,7 +65,7 @@ export interface LoadGrammarOptions {
 }
 
 /**
- * Stable shape emitted by the `@appellation/arborium-rt/grammars/<lang>`
+ * Stable shape emitted by the `@discord/arborium-rt/grammars/<lang>`
  * subpath modules. Any module whose default export satisfies this interface
  * can be handed straight to {@link Runtime.loadGrammar}: it's structurally
  * assignable to {@link LoadGrammarOptions}.

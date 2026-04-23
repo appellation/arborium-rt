@@ -11,24 +11,27 @@ per-grammar `SIDE_MODULE` parser wasms dynamically, so the tree-sitter C
 runtime and arborium's query runner live once in the browser instead of being
 baked into every grammar bundle.
 
-The repo produces two publishable npm packages:
+The repo produces one publishable npm package:
 
-1. **`@appellation/arborium-rt`** — the TypeScript runtime wrapper. Ships
-   `arborium_emscripten_runtime.wasm` (the Rust SIDE_MODULE, built for
-   `wasm32-unknown-emscripten` via `cargo build --release`), the
-   `web-tree-sitter.{wasm,mjs}` MAIN_MODULE host (built by
-   `./scripts/arborium-rt build-host`), and every built grammar as a
-   subpath module at `@appellation/arborium-rt/grammars/<lang>`. Grammar
-   subdirs (`packages/arborium-rt/dist/grammars/<lang>/`) are emitted by
-   `./scripts/arborium-rt build <group> <lang>`.
-2. **`@appellation/arborium-rt-cli`** — this dev CLI, used to build the
-   runtime and package grammars. Not required at consumer install time.
+- **`@discord/arborium-rt`** — the TypeScript runtime wrapper. Ships
+  `arborium_emscripten_runtime.wasm` (the Rust SIDE_MODULE, built for
+  `wasm32-unknown-emscripten` via `cargo build --release`), the
+  `web-tree-sitter.{wasm,mjs}` MAIN_MODULE host (built by
+  `./scripts/arborium-rt build-host`), and every built grammar as a
+  subpath module at `@discord/arborium-rt/grammars/<lang>`. Grammar
+  subdirs (`packages/arborium-rt/dist/grammars/<lang>/`) are emitted by
+  `./scripts/arborium-rt build <group> <lang>`.
+
+The dev CLI (`@discord/arborium-rt-cli`) is a private workspace package
+— never published, never built. The `./scripts/arborium-rt` wrapper runs
+it directly from TypeScript source via tsx.
 
 ## Core commands
 
 All repo tooling funnels through one CLI wrapper: `./scripts/arborium-rt
-<subcommand>`. The wrapper auto-builds the TS CLI (`pnpm install && tsc`) on
-first run, then forwards. Run `./scripts/arborium-rt --help` for the full list.
+<subcommand>`. The wrapper runs the CLI's TypeScript source directly via
+tsx — `pnpm install` on first invocation, then forwards every call. Run
+`./scripts/arborium-rt --help` for the full list.
 
 ```sh
 # First-time setup (populates submodule crates' Cargo.toml, applies patches).
@@ -57,10 +60,10 @@ pnpm -r build
 pnpm -r test
 
 # Run one Vitest file while iterating on the TS wrapper.
-pnpm --filter @appellation/arborium-rt test -- arborium.test.mts
+pnpm --filter @discord/arborium-rt test -- arborium.test.mts
 
-# Publish the runtime + CLI packages.
-./scripts/arborium-rt publish [--dry-run] [--tag next]
+# Publish the runtime package (after build-all + stage-dist).
+pnpm --filter @discord/arborium-rt publish
 ```
 
 ### Prereqs the tooling expects on PATH
@@ -109,7 +112,7 @@ the version-history block in `src/lib.rs` and the README.
 ### TypeScript consumer package (`packages/arborium-rt/`)
 
 Typed `Runtime` / `Grammar` / `Session` API over the ABI, published as
-`@appellation/arborium-rt`. `loadArboriumRuntime()` takes no args — the
+`@discord/arborium-rt`. `loadArboriumRuntime()` takes no args — the
 host `.mjs`/wasm and the runtime wasm are staged into
 `packages/arborium-rt/dist/` (under `host/` and `runtime/`) by
 `arborium-rt stage-dist`, and the TS resolver uses
@@ -123,8 +126,9 @@ wrappers in `src/runtime.ts`.
 
 ### Dev CLI (`packages/arborium-rt-cli/`)
 
-TS program published as `@appellation/arborium-rt-cli`, entry point
-`src/main.ts`. Each subcommand is its own `src/<name>.ts` module. Shared
+Private, unpublished workspace package. Run directly from source via tsx
+through `./scripts/arborium-rt`. Entry point is `src/main.ts`; each
+subcommand is its own `src/<name>.ts` module. Shared
 helpers in `src/util.ts` (repo-root discovery via walking up for a
 `Cargo.toml` containing `arborium-emscripten-runtime`; overridable via
 `ARBORIUM_RT_ROOT`). The `build-host` module owns the two "extras" arrays
@@ -166,7 +170,7 @@ submodule or tweaking a patch.
 - `packages/arborium-rt/dist/grammars/<lang>/` — per-grammar subpath
   module: `index.js`, `index.d.ts`, the wasm, and the `.scm` files
   (written by `package`). Exposed to consumers as
-  `@appellation/arborium-rt/grammars/<lang>`.
+  `@discord/arborium-rt/grammars/<lang>`.
 
 ### Verifying a runtime build
 

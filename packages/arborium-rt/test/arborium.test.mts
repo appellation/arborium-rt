@@ -1,4 +1,4 @@
-// End-to-end integration test for @appellation/arborium-rt.
+// End-to-end integration test for @discord/arborium-rt.
 //
 // Mirrors scripts/harness.mjs (repo-root), but drives the typed API rather
 // than the raw ABI. Imports from `../dist/` so `loadArboriumRuntime()` can
@@ -58,7 +58,7 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
 
     it('consumes a bundled grammar subpath end-to-end', async () => {
         // Mirrors how a consumer imports the subpath export:
-        //   import jsonGrammar from '@appellation/arborium-rt/grammars/json';
+        //   import jsonGrammar from '@discord/arborium-rt/grammars/json';
         // From inside the package the module lives at dist/grammars/json/index.js.
         const { default: jsonGrammarPackage } = await import(
             resolve(here, '..', 'dist', 'grammars', 'json', 'index.js')

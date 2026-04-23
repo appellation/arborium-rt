@@ -29,7 +29,7 @@ function renderLanguagesTs(langs: readonly string[]): string {
 
 /**
  * Every grammar id that ships as a subpath module under
- * \`@appellation/arborium-rt/grammars/<id>\`. Useful for building language
+ * \`@discord/arborium-rt/grammars/<id>\`. Useful for building language
  * pickers or validating user input before dynamically importing a grammar.
  */
 export const AVAILABLE_LANGUAGES = [
