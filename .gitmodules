@@ -1,3 +1,4 @@
 [submodule "third_party/arborium"]
 	path = third_party/arborium
 	url = https://github.com/bearcove/arborium.git
+	ignore = dirty

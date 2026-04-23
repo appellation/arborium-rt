@@ -150,14 +150,16 @@ root `Cargo.toml` path-deps four crates out of it:
   `default-features = false`; theme's builtin-generated module is
   **patched-stubbed** for emscripten.
 
-Patches live as mbox files in `patches/` (`git am` format). They're all
-trivial target guards — no logic changes on any existing target.
+Patches live as mbox files in `patches/` (`git format-patch` output).
+They're all trivial target guards — no logic changes on any existing
+target.
 
 `./scripts/arborium-rt bootstrap` is **idempotent**: it resets the
-submodule to the pinned SHA, skips patches whose `Subject:` already
-appears in submodule history, and renders every `Cargo.stpl.toml` →
-`Cargo.toml` (the submodule checks in templates only — `xtask gen` on
-arborium's side generates them normally). Re-run after bumping the
+submodule to the pinned SHA, `git apply`s each patch to the working
+tree (no commits — `git apply` ignores the mbox preamble, so no
+committer identity is required), and renders every `Cargo.stpl.toml`
+→ `Cargo.toml` (the submodule checks in templates only — `xtask gen`
+on arborium's side generates them normally). Re-run after bumping the
 submodule or tweaking a patch.
 
 ### Target layout
@@ -227,7 +229,8 @@ Expects all eleven entry points: `arborium_rt_abi_version`,
   | grep '(import "env"'`.
 - **Bumping the submodule**: checkout new SHA in `third_party/arborium`,
   re-run `./scripts/arborium-rt bootstrap`. If patches no longer apply,
-  `git am` leaves partial state; inspect with `git -C third_party/arborium
-  am --show-current-patch=diff`, fix the patch, re-run. Then
-  `cargo build --release` and commit both the submodule bump and any
-  patch updates together.
+  `git apply` rejects the patch and leaves the working tree
+  partially-modified — reset with `git -C third_party/arborium reset
+  --hard && git -C third_party/arborium clean -fd`, fix the offending
+  `patches/*.patch` file, and re-run. Then `cargo build --release` and
+  commit both the submodule bump and any patch updates together.
