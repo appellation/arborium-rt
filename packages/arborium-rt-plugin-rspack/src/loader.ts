@@ -1,13 +1,15 @@
-// Source-level loader that strips entries out of the `GRAMMARS` object
-// literal. Runs against `@discord/arborium-rt/dist/grammars.js`, whose
-// format is tightly controlled by the arborium-rt CLI's
-// `write-grammars-index.ts` generator — each entry is a 7-line block
+// Source-level loader that strips entries out of an eagerly-rendered
+// id-keyed object literal. Runs against `@discord/arborium-rt/dist/
+// grammars.js` (GRAMMARS) and `dist/themes.js` (THEMES), whose format is
+// tightly controlled by the arborium-rt CLI's `write-grammars-index.ts` /
+// `write-themes-index.ts` generators — each entry is an indented block
 // starting with `    "<id>": {` and ending with `    },`, and there's
 // nothing else inside the outer `{ … }` that could confuse the regex.
+// A single loader serves both modules because the block shape is identical.
 
 import type { LoaderContext } from '@rspack/core';
 
-import type { ArboriumRtRspackPluginOptions } from './index.js';
+import type { AllowDenyFilter } from './index.js';
 
 /**
  * Matches a single grammar entry:
@@ -23,7 +25,7 @@ import type { ArboriumRtRspackPluginOptions } from './index.js';
 const ENTRY_RE = /^    "([^"]+)": \{\n[\s\S]*?\n    \},\n/gm;
 
 export default function arboriumRtLoader(
-    this: LoaderContext<ArboriumRtRspackPluginOptions>,
+    this: LoaderContext<AllowDenyFilter>,
     source: string,
 ): string {
     const { allow, deny } = this.getOptions() ?? {};
@@ -45,7 +47,7 @@ export default function arboriumRtLoader(
     });
 
     const logger = this.getLogger?.('arborium-rt-plugin-rspack');
-    logger?.info(`filtered GRAMMARS: kept ${kept}, dropped ${dropped}`);
+    logger?.info(`filtered entries: kept ${kept}, dropped ${dropped}`);
 
     return result;
 }

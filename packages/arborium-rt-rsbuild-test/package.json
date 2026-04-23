@@ -8,7 +8,7 @@
   "scripts": {
     "build": "rsbuild build",
     "dev": "rsbuild dev",
-    "test": "rsbuild build"
+    "test": "rsbuild build && node verify.mjs"
   },
   "dependencies": {
     "@discord/arborium-rt": "workspace:*"

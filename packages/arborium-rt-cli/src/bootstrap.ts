@@ -59,5 +59,86 @@ export async function bootstrap(): Promise<void> {
         writeFileSync(join(cratesDir, crate, 'Cargo.toml'), rendered);
     }
 
+    log.step('writing arborium-theme/src/builtin_generated.rs');
+    writeArboriumThemeBuiltin(cratesDir);
+
     log.step('bootstrap complete.');
+}
+
+/**
+ * `arborium-theme` includes `builtin_generated.rs` unconditionally inside
+ * `pub mod builtin`. Upstream produces that file with `cargo xtask gen`
+ * (which also regenerates crate scaffolding we already handle here). Rather
+ * than run xtask, write a thin macro-based equivalent that exposes every
+ * bundled theme via `include_str!` + `Theme::from_toml`, gated on the
+ * `toml` feature so the emscripten SIDE_MODULE runtime (built with
+ * `default-features = false`) still collapses to empty vectors.
+ *
+ * Exposes one extra helper beyond upstream — `all_with_ids()` returns each
+ * `Theme` paired with its TOML filename stem, which is what arborium-rt
+ * uses as the stable id in the published `THEMES` map.
+ */
+function writeArboriumThemeBuiltin(cratesDir: string): void {
+    const themesDir = join(cratesDir, 'arborium-theme', 'themes');
+    const themeIds = readdirSync(themesDir)
+        .filter((name) => name.endsWith('.toml'))
+        .map((name) => name.slice(0, -'.toml'.length))
+        .sort();
+
+    const entries = themeIds
+        .map((id) => `    ${JSON.stringify(id)} => ${id.replaceAll('-', '_')},`)
+        .join('\n');
+
+    const content = `// Generated during arborium-rt bootstrap — do not edit.
+//
+// arborium-theme's src/theme.rs includes this file inside \`pub mod builtin\`.
+// Upstream produces it via \`cargo xtask gen\` from the Helix-style TOMLs
+// under ../themes/. arborium-rt's bootstrap writes an equivalent here so we
+// don't have to run xtask. Each theme is parsed from its embedded TOML on
+// first call, gated on the crate's \`toml\` feature; the emscripten runtime
+// builds arborium-theme with default features off, so the builtin surface
+// collapses to empty vectors and nothing ships in the runtime wasm.
+//
+// \`all_with_ids()\` pairs each Theme with its filename stem and is an
+// arborium-rt addition — upstream's \`all()\` discards the stem.
+
+use super::Theme;
+
+#[cfg(feature = "toml")]
+macro_rules! bundled_themes {
+    ($($id:literal => $fn_name:ident),+ $(,)?) => {
+        $(
+            pub fn $fn_name() -> Theme {
+                Theme::from_toml(include_str!(concat!("../themes/", $id, ".toml")))
+                    .expect(concat!("bundled theme parse failed: ", $id))
+            }
+        )+
+
+        pub fn all() -> Vec<Theme> {
+            vec![$( $fn_name() ),+]
+        }
+
+        pub fn all_with_ids() -> Vec<(&'static str, Theme)> {
+            vec![$( ($id, $fn_name()) ),+]
+        }
+    };
+}
+
+#[cfg(feature = "toml")]
+bundled_themes! {
+${entries}
+}
+
+#[cfg(not(feature = "toml"))]
+pub fn all() -> Vec<Theme> {
+    Vec::new()
+}
+
+#[cfg(not(feature = "toml"))]
+pub fn all_with_ids() -> Vec<(&'static str, Theme)> {
+    Vec::new()
+}
+`;
+
+    writeFileSync(join(cratesDir, 'arborium-theme', 'src', 'builtin_generated.rs'), content);
 }

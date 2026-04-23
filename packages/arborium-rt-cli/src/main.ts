@@ -16,6 +16,7 @@ import { buildGrammarIndex } from './arborium-yaml.js';
 import { QUERY_TYPES, flattenAllIntoDir } from './flatten.js';
 import { packageAll } from './package-all.js';
 import { stageDist } from './stage-dist.js';
+import { stageThemes } from './stage-themes.js';
 import { Logger, paths } from './util.js';
 import { writeGrammarsIndexModule } from './write-grammars-index.js';
 import { writeLanguagesModule } from './write-languages.js';
@@ -33,6 +34,7 @@ Subcommands:
   package-all [--only a,b,c] [-j N]  regenerate dist/grammars/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
   stage-dist                         stage built wasms into packages/arborium-rt/dist for publish
+  stage-themes                       render theme CSS + emit src/themes.ts from arborium-theme builtin
   --help, -h                         this help text
   --version                          print the CLI version
 
@@ -61,6 +63,7 @@ async function main(argv: readonly string[]): Promise<number> {
         case 'package-all':      return cmdPackageAll(rest);
         case 'flatten-queries':  return cmdFlatten(rest);
         case 'stage-dist':       await stageDist(); return 0;
+        case 'stage-themes':     await stageThemes(); return 0;
         case '--help':
         case '-h':
         case undefined:

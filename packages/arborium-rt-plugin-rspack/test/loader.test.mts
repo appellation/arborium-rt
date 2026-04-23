@@ -78,3 +78,55 @@ describe('ArboriumRtRspackPlugin loader', () => {
         expect(out).toMatch(/\};\n$/);
     });
 });
+
+// Themes fixture mirrors write-themes-index.ts output. The loader uses the
+// same block regex against both modules because the entry shape is
+// identical; these tests pin that guarantee.
+const THEMES_FIXTURE = `\
+export const THEMES = {
+    "one-dark": {
+        themeId: "one-dark",
+        name: "One Dark",
+        variant: "dark",
+        background: "#282c34",
+        foreground: "#abb2bf",
+        css: new URL("./themes/one-dark.css", import.meta.url),
+    },
+    "catppuccin-mocha": {
+        themeId: "catppuccin-mocha",
+        name: "Mocha",
+        variant: "dark",
+        background: "#1e1e2e",
+        foreground: "#cdd6f4",
+        css: new URL("./themes/catppuccin-mocha.css", import.meta.url),
+    },
+    "github-light": {
+        themeId: "github-light",
+        name: "GitHub Light",
+        variant: "light",
+        background: "#ffffff",
+        foreground: "#24292e",
+        css: new URL("./themes/github-light.css", import.meta.url),
+    },
+};
+`;
+
+describe('ArboriumRtRspackPlugin loader against THEMES', () => {
+    it('keeps only allow-listed theme ids', () => {
+        const out = runLoader(THEMES_FIXTURE, { allow: ['one-dark'] });
+        expect(out).toContain('"one-dark"');
+        expect(out).not.toContain('"catppuccin-mocha"');
+        expect(out).not.toContain('"github-light"');
+        // The `new URL(...)` for dropped themes must disappear — that's the
+        // whole point, since rspack traces those statically.
+        expect(out).not.toMatch(/themes\/catppuccin-mocha\.css/);
+        expect(out).not.toMatch(/themes\/github-light\.css/);
+    });
+
+    it('drops deny-listed theme ids', () => {
+        const out = runLoader(THEMES_FIXTURE, { deny: ['catppuccin-mocha'] });
+        expect(out).toContain('"one-dark"');
+        expect(out).toContain('"github-light"');
+        expect(out).not.toContain('"catppuccin-mocha"');
+    });
+});
