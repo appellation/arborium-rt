@@ -37,12 +37,17 @@ jobs:
           version: 4.0.15
           actions-cache-folder: emsdk-cache
 
-      # Installed from outside the repo so the repo's `.cargo/config.toml`
-      # (which pins the build target to wasm32-unknown-emscripten) doesn't
-      # apply to this host-tool install.
       - name: Install tree-sitter CLI
-        working-directory: ${{ runner.temp }}
-        run: cargo install --locked tree-sitter-cli
+        env:
+          TREE_SITTER_VERSION: "0.26.8"
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/tree-sitter.gz \
+            "https://github.com/tree-sitter/tree-sitter/releases/download/v${TREE_SITTER_VERSION}/tree-sitter-linux-x64.gz"
+          gunzip -c /tmp/tree-sitter.gz > "$HOME/.local/bin/tree-sitter"
+          chmod +x "$HOME/.local/bin/tree-sitter"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/tree-sitter" --version
 
       - name: pnpm install
         run: pnpm install --frozen-lockfile
