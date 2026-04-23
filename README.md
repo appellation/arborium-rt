@@ -51,25 +51,25 @@ npm install @discord/arborium-rt
 ```
 
 ```ts
-import { loadArboriumRuntime } from '@discord/arborium-rt';
-import jsonGrammar from '@discord/arborium-rt/grammars/json';
+import { loadArboriumRuntime } from "@discord/arborium-rt";
+import jsonGrammar from "@discord/arborium-rt/grammars/json";
 
 const runtime = await loadArboriumRuntime();
 const grammar = await runtime.loadGrammar(jsonGrammar);
 const session = grammar.createSession();
 try {
-    session.setText('[1, 2, 3]');
+  session.setText("[1, 2, 3]");
 
-    // Render straight to HTML — parse + inject + theme, one call.
-    const html = session.highlightToHtml();
-    // e.g.: '[<a-n>1</a-n>, <a-n>2</a-n>, <a-n>3</a-n>]'
+  // Render straight to HTML — parse + inject + theme, one call.
+  const html = session.highlightToHtml();
+  // e.g.: '[<a-n>1</a-n>, <a-n>2</a-n>, <a-n>3</a-n>]'
 
-    // Or get themed spans if you want to render yourself (offsets are UTF-16):
-    const spans = session.highlightToSpans();
-    // [{ start: 1, end: 2, tag: 'n' }, { start: 4, end: 5, tag: 'n' }, ...]
+  // Or get themed spans if you want to render yourself (offsets are UTF-16):
+  const spans = session.highlightToSpans();
+  // [{ start: 1, end: 2, tag: 'n' }, { start: 4, end: 5, tag: 'n' }, ...]
 } finally {
-    session.free();
-    grammar.unregister();
+  session.free();
+  grammar.unregister();
 }
 ```
 
@@ -99,8 +99,8 @@ Grammars ship inside the main `@discord/arborium-rt` tarball and are
 imported via subpath exports — one `import` per grammar the consumer wants:
 
 ```ts
-import jsonGrammar from '@discord/arborium-rt/grammars/json';
-import cssGrammar  from '@discord/arborium-rt/grammars/css';
+import jsonGrammar from "@discord/arborium-rt/grammars/json";
+import cssGrammar from "@discord/arborium-rt/grammars/css";
 ```
 
 Each subpath resolves to a tiny ESM module whose default export is
@@ -139,35 +139,46 @@ surface is a set of `arborium_rt_*` `extern "C"` functions exchanging
 bytes through shared linear memory. A minimal JS driver:
 
 ```js
-import MainModuleFactory from './web-tree-sitter.mjs';
+import MainModuleFactory from "./web-tree-sitter.mjs";
 const Module = await MainModuleFactory();
 
 const runtime = await Module.loadWebAssemblyModule(
-    await fetch('arborium_emscripten_runtime.wasm').then(r => r.arrayBuffer()),
-    { loadAsync: true });
+  await fetch("arborium_emscripten_runtime.wasm").then((r) => r.arrayBuffer()),
+  { loadAsync: true },
+);
 if (runtime.arborium_rt_abi_version() !== 2)
-    throw new Error('arborium_rt ABI mismatch');
+  throw new Error("arborium_rt ABI mismatch");
 
 const json = await Module.loadWebAssemblyModule(
-    await fetch('tree-sitter-json.wasm').then(r => r.arrayBuffer()),
-    { loadAsync: true });
+  await fetch("tree-sitter-json.wasm").then((r) => r.arrayBuffer()),
+  { loadAsync: true },
+);
 const langPtr = json.tree_sitter_json();
 
 function putStr(s) {
-    const bytes = new TextEncoder().encode(s);
-    const p = Module._malloc(bytes.length);
-    Module.HEAPU8.set(bytes, p);
-    return [p, bytes.length];
+  const bytes = new TextEncoder().encode(s);
+  const p = Module._malloc(bytes.length);
+  Module.HEAPU8.set(bytes, p);
+  return [p, bytes.length];
 }
-const [nPtr, nLen] = putStr('json');  // language name, used for injection lookups
+const [nPtr, nLen] = putStr("json"); // language name, used for injection lookups
 const [hPtr, hLen] = putStr(HIGHLIGHTS_SCM);
-const [iPtr, iLen] = putStr('');
-const [lPtr, lLen] = putStr('');
+const [iPtr, iLen] = putStr("");
+const [lPtr, lLen] = putStr("");
 const grammarId = runtime.arborium_rt_register_grammar(
-    langPtr, nPtr, nLen, hPtr, hLen, iPtr, iLen, lPtr, lLen);
+  langPtr,
+  nPtr,
+  nLen,
+  hPtr,
+  hLen,
+  iPtr,
+  iLen,
+  lPtr,
+  lLen,
+);
 
 const sessionId = runtime.arborium_rt_create_session(grammarId);
-const [tPtr, tLen] = putStr('[1, 2, 3]');
+const [tPtr, tLen] = putStr("[1, 2, 3]");
 runtime.arborium_rt_set_text(sessionId, tPtr, tLen);
 Module._free(tPtr);
 
@@ -175,17 +186,26 @@ Module._free(tPtr);
 // (`<a-k>…</a-k>`), `maxDepth=3` matches the TS wrapper's default.
 const outPtr = Module._malloc(4);
 const outLen = Module._malloc(4);
-if (runtime.arborium_rt_highlight_to_html(
-        sessionId, /* maxDepth */ 3, /* format */ 0,
-        /* prefixPtr */ 0, /* prefixLen */ 0,
-        outPtr, outLen) !== 0)
-    throw new Error('highlight failed');
+if (
+  runtime.arborium_rt_highlight_to_html(
+    sessionId,
+    /* maxDepth */ 3,
+    /* format */ 0,
+    /* prefixPtr */ 0,
+    /* prefixLen */ 0,
+    outPtr,
+    outLen,
+  ) !== 0
+)
+  throw new Error("highlight failed");
 const html = Module.UTF8ToString(
-    Module.getValue(outPtr, 'i32'),
-    Module.getValue(outLen, 'i32'));
+  Module.getValue(outPtr, "i32"),
+  Module.getValue(outLen, "i32"),
+);
 runtime.arborium_rt_free(
-    Module.getValue(outPtr, 'i32'),
-    Module.getValue(outLen, 'i32'));
+  Module.getValue(outPtr, "i32"),
+  Module.getValue(outLen, "i32"),
+);
 Module._free(outPtr);
 Module._free(outLen);
 ```
@@ -199,21 +219,6 @@ points with no theming, use `arborium_rt_parse_utf16`.
 The full C ABI is documented inline in
 [`src/abi.rs`](./src/abi.rs) — pointer ownership rules, return codes,
 and per-function contracts.
-
-## ABI stability
-
-The C ABI is versioned by `ABI_VERSION` (currently `2`) exposed via
-`arborium_rt_abi_version()`. Consumers should call it right after
-`loadWebAssemblyModule` and refuse to proceed on mismatch. The typed
-wrapper does this for you.
-
-Version history:
-
-- **v1** — initial surface: register/unregister grammar, sessions, raw parse.
-- **v2** — `arborium_rt_register_grammar` gained a language-name parameter
-  (used for injection lookups); added `arborium_rt_highlight_to_spans_utf16`
-  and `arborium_rt_highlight_to_html` for full parse+highlight+render in
-  one call.
 
 ## Building from source
 
