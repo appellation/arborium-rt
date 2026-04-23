@@ -16,18 +16,22 @@ import {
 } from 'node:fs';
 import { join, relative } from 'node:path';
 
-import { buildGrammarIndex } from './arborium-yaml.js';
+import { buildGrammarIndex, type GrammarIndexEntry } from './arborium-yaml.js';
 import { QUERY_TYPES, type QueryType } from './flatten.js';
-import { paths, step } from './util.js';
-import { writeLanguagesModule } from './write-languages.js';
+import { Logger, paths } from './util.js';
 
 export interface BuildPackageArgs {
     group: string;
     lang: string;
+    /** Logger for this package step. Defaults to one tagged with `lang`. */
+    log?: Logger;
+    /** Pre-built corpus index. Defaults to scanning the filesystem. */
+    index?: Map<string, GrammarIndexEntry>;
 }
 
 export async function buildPackage(args: BuildPackageArgs): Promise<void> {
     const p = paths();
+    const log = args.log ?? new Logger(args.lang);
     const grammarDir = join(p.grammarsOut, args.lang);
     const outDir = join(p.packagesOut, args.lang);
     const wasmName = `tree-sitter-${args.lang}.wasm`;
@@ -39,7 +43,7 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
         );
     }
 
-    const index = buildGrammarIndex(p.langsRoot);
+    const index = args.index ?? buildGrammarIndex(p.langsRoot);
     const entry = index.get(args.lang);
     const cSymbol = entry?.grammar.c_symbol ?? args.lang;
 
@@ -69,13 +73,11 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
         renderIndexDts(args.lang, languageExport, queries),
     );
 
-    step(`wrote grammars/${args.lang} to ${relative(p.repoRoot, outDir)}`);
+    log.step(`wrote grammars/${args.lang} to ${relative(p.repoRoot, outDir)}`);
     for (const name of ['index.js', 'index.d.ts', wasmName]) {
         const size = statSync(join(outDir, name)).size;
-        console.error(`    ${size.toString().padStart(9)}  ${name}`);
+        log.info(`    ${size.toString().padStart(9)}  ${name}`);
     }
-
-    writeLanguagesModule();
 }
 
 function renderIndexJs(

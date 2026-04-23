@@ -5,15 +5,19 @@
 // boilerplate.
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 
 import { buildGrammarIndex } from './arborium-yaml.js';
 import { buildPackage } from './build-package.js';
-import { paths, step } from './util.js';
+import { Logger, paths, runPool } from './util.js';
+import { writeLanguagesModule } from './write-languages.js';
 
 export interface PackageAllArgs {
     /** If set, only repackage these grammar ids. */
     only?: string[];
+    /** Max concurrent package steps. Defaults to `os.availableParallelism()`. */
+    jobs?: number;
 }
 
 export interface PackageAllResult {
@@ -43,29 +47,35 @@ export async function packageAll(args: PackageAllArgs = {}): Promise<PackageAllR
     const ok: string[] = [];
     const failed: Array<{ id: string; reason: string }> = [];
 
-    for (const [i, id] of targets.entries()) {
+    const jobs = Math.max(1, args.jobs ?? availableParallelism());
+    const root = new Logger('package-all');
+
+    await runPool(targets, jobs, async (id) => {
         const entry = index.get(id);
         if (!entry) {
             failed.push({ id, reason: 'not in grammar index' });
-            continue;
+            return;
         }
-        const progress = `[${i + 1}/${targets.length}]`;
-        process.stderr.write(`\n===== ${progress} ${entry.group}/${id} =====\n`);
+        const log = new Logger(id);
         try {
-            await buildPackage({ group: entry.group, lang: id });
+            await buildPackage({ group: entry.group, lang: id, log, index });
             ok.push(id);
         } catch (e) {
             const reason = e instanceof Error ? e.message : String(e);
             failed.push({ id, reason });
-            process.stderr.write(`FAIL ${id}: ${reason}\n`);
+            log.warn(`FAIL: ${reason}`);
         }
-    }
+    });
 
-    step(`regenerated ${ok.length}/${targets.length} grammar subpath(s)`);
+    // One regeneration after every subdir is written — avoids the write
+    // race that per-grammar calls would have under parallelism.
+    writeLanguagesModule();
+
+    root.step(`regenerated ${ok.length}/${targets.length} grammar subpath(s)`);
     if (failed.length > 0) {
-        process.stderr.write(`\nfailures:\n`);
+        root.step('failures:');
         for (const { id, reason } of failed) {
-            process.stderr.write(`  ${id}: ${reason.split('\n')[0]}\n`);
+            root.info(`  ${id}: ${reason.split('\n')[0]}`);
         }
     }
 

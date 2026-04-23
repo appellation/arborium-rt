@@ -16,7 +16,8 @@ import { buildGrammarIndex } from './arborium-yaml.js';
 import { QUERY_TYPES, flattenAllIntoDir } from './flatten.js';
 import { packageAll } from './package-all.js';
 import { stageDist } from './stage-dist.js';
-import { paths, step } from './util.js';
+import { Logger, paths } from './util.js';
+import { writeLanguagesModule } from './write-languages.js';
 
 const USAGE = `\
 arborium-rt <subcommand> [options]
@@ -27,8 +28,8 @@ Subcommands:
   build-grammar <group> <lang>       build tree-sitter-<lang>.wasm + flatten queries
   package <group> <lang>             generate dist/grammars/<lang>/ inside the runtime package
   build <group> <lang>               shorthand: build-grammar then package
-  build-all [--only a,b,c]           build + package every grammar in the corpus
-  package-all [--only a,b,c]         regenerate dist/grammars/* from already-built grammars
+  build-all [--only a,b,c] [-j N]    build + package every grammar in the corpus
+  package-all [--only a,b,c] [-j N]  regenerate dist/grammars/* from already-built grammars
   flatten-queries <group> <lang>     (re)flatten queries into target/grammars/<lang>/
   stage-dist                         stage built wasms into packages/arborium-rt/dist for publish
   --help, -h                         this help text
@@ -92,6 +93,8 @@ async function cmdBuildPackage(args: readonly string[]): Promise<number> {
         return 1;
     }
     await buildPackage({ group, lang });
+    // Regenerate the languages.ts constant so it reflects the new subdir.
+    writeLanguagesModule();
     return 0;
 }
 
@@ -108,12 +111,15 @@ async function cmdBuildAll(args: readonly string[]): Promise<number> {
         options: {
             only: { type: 'string' },
             'skip-package': { type: 'boolean', default: false },
+            jobs: { type: 'string', short: 'j' },
         },
     });
     const only = values.only ? values.only.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+    const jobs = parseJobs(values.jobs);
     const result = await buildAll({
         ...(only && only.length > 0 ? { only } : {}),
         skipPackage: values['skip-package'] === true,
+        ...(jobs !== undefined ? { jobs } : {}),
     });
     return result.failed.length === 0 ? 0 : 1;
 }
@@ -124,15 +130,27 @@ async function cmdPackageAll(args: readonly string[]): Promise<number> {
         allowPositionals: false,
         options: {
             only: { type: 'string' },
+            jobs: { type: 'string', short: 'j' },
         },
     });
     const only = values.only
         ? values.only.split(',').map((s) => s.trim()).filter(Boolean)
         : undefined;
+    const jobs = parseJobs(values.jobs);
     const result = await packageAll({
         ...(only && only.length > 0 ? { only } : {}),
+        ...(jobs !== undefined ? { jobs } : {}),
     });
     return result.failed.length === 0 ? 0 : 1;
+}
+
+function parseJobs(raw: string | undefined): number | undefined {
+    if (raw === undefined) return undefined;
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n) || n < 1) {
+        throw new Error(`--jobs expects a positive integer, got ${JSON.stringify(raw)}`);
+    }
+    return n;
 }
 
 async function cmdFlatten(args: readonly string[]): Promise<number> {
@@ -143,10 +161,11 @@ async function cmdFlatten(args: readonly string[]): Promise<number> {
         return 1;
     }
     const p = paths();
+    const log = new Logger(lang);
     const outDir = join(p.grammarsOut, lang);
     const index = buildGrammarIndex(p.langsRoot);
     flattenAllIntoDir(lang, index, outDir);
-    step(`wrote flattened queries for ${lang} to ${outDir} (${QUERY_TYPES.join(', ')})`);
+    log.step(`wrote flattened queries to ${outDir} (${QUERY_TYPES.join(', ')})`);
     return 0;
 }
 

@@ -4,10 +4,11 @@
 import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
-import { paths, step } from './util.js';
+import { Logger, paths } from './util.js';
 
 export async function stageDist(): Promise<void> {
     const p = paths();
+    const log = new Logger('stage-dist');
     const hostSrcDir = p.hostWasmOut;
     const hostWasm = join(hostSrcDir, 'web-tree-sitter.wasm');
     const hostMjs = join(hostSrcDir, 'web-tree-sitter.mjs');
@@ -36,13 +37,13 @@ export async function stageDist(): Promise<void> {
     copyFileSync(hostMjs, join(hostDest, 'web-tree-sitter.mjs'));
     copyFileSync(p.runtimeWasm, join(runtimeDest, 'arborium_emscripten_runtime.wasm'));
 
-    step('staged assets:');
+    log.step('staged assets:');
     for (const file of [
         join(hostDest, 'web-tree-sitter.wasm'),
         join(hostDest, 'web-tree-sitter.mjs'),
         join(runtimeDest, 'arborium_emscripten_runtime.wasm'),
     ]) {
         const size = statSync(file).size;
-        console.error(`    ${size.toString().padStart(10)}  ${relative(p.repoRoot, file)}`);
+        log.info(`    ${size.toString().padStart(10)}  ${relative(p.repoRoot, file)}`);
     }
 }

@@ -8,13 +8,14 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { paths, run, step } from './util.js';
+import { Logger, paths, run } from './util.js';
 
 /** Local version string rendered into each `Cargo.toml` from its template. */
 const RENDER_VERSION = '0.0.0-arborium-rt';
 
 export async function bootstrap(): Promise<void> {
     const p = paths();
+    const log = new Logger('bootstrap');
 
     if (!existsSync(join(p.submoduleRoot, '.git'))) {
         throw new Error(
@@ -22,29 +23,29 @@ export async function bootstrap(): Promise<void> {
         );
     }
 
-    step('resetting submodule to its pinned commit');
-    await run('git', [
+    log.step('resetting submodule to its pinned commit');
+    await run(log, 'git', [
         '-C', p.repoRoot,
         'submodule', 'update', '--init', '--force', 'third_party/arborium',
     ]);
-    await run('git', ['-C', p.submoduleRoot, 'clean', '-fd']);
+    await run(log, 'git', ['-C', p.submoduleRoot, 'clean', '-fd']);
 
     const patches = readdirSync(p.patchesDir)
         .filter((name) => name.endsWith('.patch'))
         .sort();
     for (const patch of patches) {
-        step(`applying ${patch}`);
+        log.step(`applying ${patch}`);
         // git apply tolerates the mbox `From:`/`Subject:` preamble — it
         // reads the unified diff and ignores the commit metadata, so no
         // committer identity is needed.
-        await run('git', [
+        await run(log, 'git', [
             '-C', p.submoduleRoot,
             'apply', '--whitespace=nowarn',
             join(p.patchesDir, patch),
         ]);
     }
 
-    step(`rendering Cargo.toml from Cargo.stpl.toml (version ${RENDER_VERSION})`);
+    log.step(`rendering Cargo.toml from Cargo.stpl.toml (version ${RENDER_VERSION})`);
     const cratesDir = join(p.submoduleRoot, 'crates');
     for (const crate of readdirSync(cratesDir)) {
         const stpl = join(cratesDir, crate, 'Cargo.stpl.toml');
@@ -54,5 +55,5 @@ export async function bootstrap(): Promise<void> {
         writeFileSync(join(cratesDir, crate, 'Cargo.toml'), rendered);
     }
 
-    step('bootstrap complete.');
+    log.step('bootstrap complete.');
 }

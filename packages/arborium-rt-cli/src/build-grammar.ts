@@ -16,15 +16,20 @@ import {
     type GrammarIndexEntry,
 } from './arborium-yaml.js';
 import { flattenAllIntoDir } from './flatten.js';
-import { hasCommand, paths, run, step, warn } from './util.js';
+import { Logger, hasCommand, paths, run } from './util.js';
 
 export interface BuildGrammarArgs {
     group: string;
     lang: string;
+    /** Logger for this build. Defaults to one tagged with `lang`. */
+    log?: Logger;
+    /** Pre-built corpus index. Defaults to scanning the filesystem. */
+    index?: Map<string, GrammarIndexEntry>;
 }
 
 export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
     const p = paths();
+    const log = args.log ?? new Logger(args.lang);
     const defDir = join(p.langsRoot, args.group, args.lang, 'def');
     const grammarDir = join(defDir, 'grammar');
     const grammarJs = join(grammarDir, 'grammar.js');
@@ -43,7 +48,7 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
     rmSync(buildDir, { recursive: true, force: true });
     mkdirSync(buildDir, { recursive: true });
 
-    const index = buildGrammarIndex(p.langsRoot);
+    const index = args.index ?? buildGrammarIndex(p.langsRoot);
     const currentEntry = index.get(args.lang);
     const cSymbol = currentEntry?.grammar.c_symbol ?? args.lang;
 
@@ -56,7 +61,7 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
     // dirs, and expose it via NODE_PATH so Node's resolution finds them even
     // though the grammar.js lives at a different path.
     if (currentEntry) {
-        stageNpmDeps(currentEntry, index, buildDir);
+        stageNpmDeps(currentEntry, index, buildDir, log);
     }
     const nodeModules = join(buildDir, 'node_modules');
     const runEnv = existsSync(nodeModules)
@@ -64,8 +69,8 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
         : undefined;
 
     // --- generate parser.c ----------------------------------------------------
-    step(`generating parser.c from ${relative(p.repoRoot, grammarJs)}`);
-    await run('tree-sitter', ['generate', grammarJs], {
+    log.step(`generating parser.c from ${relative(p.repoRoot, grammarJs)}`);
+    await run(log, 'tree-sitter', ['generate', grammarJs], {
         cwd: buildDir,
         ...(runEnv ? { env: runEnv } : {}),
     });
@@ -94,8 +99,9 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
     const commonCflags = ['-O2', '-fPIC', '-I', 'src'];
     const objs: string[] = [];
 
-    step('compiling src/parser.c (C)');
+    log.step('compiling src/parser.c (C)');
     await run(
+        log,
         'emcc',
         [...commonCflags, '-std=c11', '-c', 'src/parser.c', '-o', 'parser.o'],
         { cwd: buildDir },
@@ -104,8 +110,9 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
 
     if (scannerC) {
         copyFileSync(scannerC, join(buildDir, 'src', 'scanner.c'));
-        step('compiling src/scanner.c (C)');
+        log.step('compiling src/scanner.c (C)');
         await run(
+            log,
             'emcc',
             [...commonCflags, '-std=c11', '-c', 'src/scanner.c', '-o', 'scanner.o'],
             { cwd: buildDir },
@@ -114,8 +121,9 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
     } else if (scannerCxx) {
         const scannerBase = basename(scannerCxx);
         copyFileSync(scannerCxx, join(buildDir, 'src', scannerBase));
-        step(`compiling src/${scannerBase} (C++)`);
+        log.step(`compiling src/${scannerBase} (C++)`);
         await run(
+            log,
             'em++',
             [
                 ...commonCflags, '-std=c++17', '-fno-exceptions', '-fno-rtti',
@@ -129,8 +137,9 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
     // --- link -----------------------------------------------------------------
     const linker = scannerCxx ? 'em++' : 'emcc';
     const wasmOut = join(outDir, `tree-sitter-${args.lang}.wasm`);
-    step(`linking tree-sitter-${args.lang}.wasm (${linker}, tree_sitter_${cSymbol})`);
+    log.step(`linking tree-sitter-${args.lang}.wasm (${linker}, tree_sitter_${cSymbol})`);
     await run(
+        log,
         linker,
         [
             '-O2', '-fPIC',
@@ -143,10 +152,10 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
     );
 
     // --- flatten queries ------------------------------------------------------
-    step('flattening queries');
+    log.step('flattening queries');
     flattenAllIntoDir(args.lang, index, outDir);
 
-    step(`built ${relative(p.repoRoot, outDir)}`);
+    log.step(`built ${relative(p.repoRoot, outDir)}`);
 }
 
 /**
@@ -159,6 +168,7 @@ function stageNpmDeps(
     start: GrammarIndexEntry,
     index: Map<string, GrammarIndexEntry>,
     buildDir: string,
+    log: Logger,
 ): void {
     const staged = new Set<string>();
 
@@ -175,7 +185,7 @@ function stageNpmDeps(
             const depId = dep.npm.replace(/^tree-sitter-/, '');
             const depEntry = index.get(depId);
             if (!depEntry) {
-                warn(`dep ${dep.npm} -> grammar id ${depId} not found in corpus; skipping`);
+                log.warn(`dep ${dep.npm} -> grammar id ${depId} not found in corpus; skipping`);
                 continue;
             }
             staged.add(dep.npm);
@@ -189,7 +199,7 @@ function stageNpmDeps(
                 const err = e as NodeJS.ErrnoException;
                 if (err.code !== 'EEXIST') throw e;
             }
-            step(`staged node_modules/${dep.npm} -> ${relative(buildDir, target)}`);
+            log.step(`staged node_modules/${dep.npm} -> ${relative(buildDir, target)}`);
 
             // Recurse so transitive deps (HLSL -> CPP -> C) are also staged.
             walk(depEntry);

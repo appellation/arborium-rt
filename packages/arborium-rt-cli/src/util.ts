@@ -5,6 +5,30 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 /**
+ * Tagged logger. Every line written through a logger (including lines
+ * emitted by child processes started via `run(logger, ...)`) is prefixed
+ * with `[<prefix>] ` so parallel builds stay readable on a shared stderr.
+ */
+export class Logger {
+    constructor(readonly prefix: string) {}
+
+    /** Structured "==>" progress line. */
+    step(msg: string): void {
+        process.stderr.write(`[${this.prefix}] ==> ${msg}\n`);
+    }
+
+    /** Non-fatal warning. */
+    warn(msg: string): void {
+        process.stderr.write(`[${this.prefix}] warn: ${msg}\n`);
+    }
+
+    /** Plain tagged line — no step/warn decoration. */
+    info(msg: string): void {
+        process.stderr.write(`[${this.prefix}] ${msg}\n`);
+    }
+}
+
+/**
  * Walk up from `start` until a directory contains a marker file identifying
  * the arborium-rt repo (the root Cargo.toml with the crate name). Falls back
  * to `$ARBORIUM_RT_ROOT` if set.
@@ -83,30 +107,35 @@ export interface RunOptions {
     env?: NodeJS.ProcessEnv;
     /** Pipe a string as stdin. Useful for `git am <patch`. */
     input?: string;
-    /** Suppress stdout/stderr forwarding to this process. Defaults to false. */
-    quiet?: boolean;
 }
 
 /**
- * Run a command, streaming its stdio to ours by default. Rejects on non-zero
+ * Run a command with its stdout/stderr line-buffered and tagged with the
+ * logger's prefix before being forwarded to our stderr. Rejects on non-zero
  * exit; the Error message includes the command for grep-ability.
+ *
+ * Always pipes — callers that don't care about output should use
+ * `runSilent` instead.
  */
 export async function run(
+    logger: Logger,
     cmd: string,
     args: readonly string[],
     options: RunOptions = {},
 ): Promise<void> {
     await new Promise<void>((resolvePromise, rejectPromise) => {
+        const wantsInput = options.input !== undefined;
         const child = spawn(cmd, args as string[], {
             cwd: options.cwd,
             env: options.env ? { ...process.env, ...options.env } : process.env,
-            stdio: options.input !== undefined
-                ? ['pipe', options.quiet ? 'ignore' : 'inherit', options.quiet ? 'ignore' : 'inherit']
-                : options.quiet ? 'ignore' : 'inherit',
+            stdio: [wantsInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
         });
-        if (options.input !== undefined) {
+        if (wantsInput) {
             child.stdin?.end(options.input);
         }
+        const tag = `[${logger.prefix}] `;
+        pipePrefixed(child.stdout, tag);
+        pipePrefixed(child.stderr, tag);
         child.once('error', rejectPromise);
         child.once('close', (code) => {
             if (code === 0) resolvePromise();
@@ -117,22 +146,56 @@ export async function run(
     });
 }
 
+/**
+ * Line-buffer a piped child stream and write each line to our stderr with a
+ * tag prefix. Any trailing non-newline-terminated output is flushed on `end`.
+ */
+function pipePrefixed(stream: NodeJS.ReadableStream | null, tag: string): void {
+    if (!stream) return;
+    let buf = '';
+    stream.setEncoding('utf8');
+    stream.on('data', (chunk: string) => {
+        buf += chunk;
+        let i: number;
+        while ((i = buf.indexOf('\n')) !== -1) {
+            process.stderr.write(`${tag}${buf.slice(0, i)}\n`);
+            buf = buf.slice(i + 1);
+        }
+    });
+    stream.on('end', () => {
+        if (buf.length > 0) process.stderr.write(`${tag}${buf}\n`);
+    });
+}
+
 /** Equivalent of `command -v` — returns true if the tool is on PATH. */
 export async function hasCommand(cmd: string): Promise<boolean> {
-    try {
-        await run('which', [cmd], { quiet: true });
-        return true;
-    } catch {
-        return false;
-    }
+    return await new Promise<boolean>((resolvePromise) => {
+        const child = spawn('which', [cmd], { stdio: 'ignore' });
+        child.once('error', () => resolvePromise(false));
+        child.once('close', (code) => resolvePromise(code === 0));
+    });
 }
 
-/** Print a "==> step" heading to stderr, matching the old shell scripts' style. */
-export function step(message: string): void {
-    console.error(`==> ${message}`);
-}
-
-/** Print a non-fatal warning. */
-export function warn(message: string): void {
-    console.error(`warn: ${message}`);
+/**
+ * Run `fn` over `items` with at most `concurrency` in flight. Items start in
+ * order but may complete out of order. An exception in one item does not
+ * abort the pool; callers are responsible for catching and collecting
+ * per-item results inside `fn`.
+ */
+export async function runPool<T>(
+    items: readonly T[],
+    concurrency: number,
+    fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+    const n = Math.min(Math.max(1, concurrency), items.length);
+    let next = 0;
+    await Promise.all(
+        Array.from({ length: n }, async () => {
+            while (true) {
+                const i = next++;
+                if (i >= items.length) return;
+                await fn(items[i]!, i);
+            }
+        }),
+    );
 }

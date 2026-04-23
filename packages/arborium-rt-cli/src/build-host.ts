@@ -9,7 +9,7 @@
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { hasCommand, paths, run, step } from './util.js';
+import { Logger, hasCommand, paths, run } from './util.js';
 
 /**
  * Plain tree-sitter C symbols arborium-rt's runtime imports that aren't in
@@ -97,6 +97,7 @@ const EXPORTED_RUNTIME_METHODS = [
 
 export async function buildHost(): Promise<void> {
     const p = paths();
+    const log = new Logger('host');
 
     if (!await hasCommand('emcc')) {
         throw new Error('emcc not found on PATH. install emsdk 4.0.15 and source emsdk_env.sh.');
@@ -121,8 +122,9 @@ export async function buildHost(): Promise<void> {
 
     const exports = [baseExports, ...EXTRA_TS_EXPORTS, ...EXTRA_LIBC_EXPORTS].join(',');
 
-    step('compiling web-tree-sitter.wasm (MAIN_MODULE=2)');
+    log.step('compiling web-tree-sitter.wasm (MAIN_MODULE=2)');
     await run(
+        log,
         'emcc',
         [
             '-O3', '--minify', '0',
@@ -160,5 +162,5 @@ export async function buildHost(): Promise<void> {
         { cwd: p.bindingRoot },
     );
 
-    step(`built web-tree-sitter.{wasm,mjs} in ${p.hostWasmOut}`);
+    log.step(`built web-tree-sitter.{wasm,mjs} in ${p.hostWasmOut}`);
 }
