@@ -1,3 +1,4 @@
 dist/
 *.tsbuildinfo
 src/languages.ts
+src/grammars.ts

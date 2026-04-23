@@ -4,6 +4,7 @@ import {
     ArboriumError,
     putUtf8,
     readUtf8,
+    resolveText,
     resolveWasm,
     type HostModule,
     type HostModuleFactory,
@@ -26,10 +27,22 @@ import type {
  */
 export async function loadArboriumRuntime(): Promise<Runtime> {
     const factory = await loadBundledHostModuleFactory();
-    const host = await factory();
-    const runtimeBytes = await resolveWasm(
-        new URL('./runtime/arborium_emscripten_runtime.wasm', import.meta.url),
-    );
+    // The host is built with `-sENVIRONMENT=web,worker`, which drops the
+    // Node branch (and therefore the `await import("module")` that breaks
+    // rspack/webpack static analysis). That leaves the loader expecting to
+    // fetch its companion wasm off the script URL — we pre-fetch via our
+    // own `resolveWasm` so both Node (`file:` URL) and web (`http(s):`)
+    // paths go through the same bytes-in-hand route.
+    const [hostWasm, runtimeBytes] = await Promise.all([
+        resolveWasm(new URL('./host/web-tree-sitter.wasm', import.meta.url)),
+        resolveWasm(new URL('./runtime/arborium_emscripten_runtime.wasm', import.meta.url)),
+    ]);
+    // `@types/emscripten` types `wasmBinary` as `ArrayBuffer`, but the
+    // emscripten runtime accepts any ArrayBuffer-like and wraps it through
+    // `new Uint8Array(...)` — passing our `Uint8Array` directly avoids
+    // slicing-out the buffer range when `resolveWasm` returns a view with
+    // a non-zero offset (happens under Node's `fs.readFile`).
+    const host = await factory({ wasmBinary: hostWasm as unknown as ArrayBuffer });
     const abi = (await host.loadWebAssemblyModule(runtimeBytes, {
         loadAsync: true,
     })) as unknown as RuntimeAbi;
@@ -50,12 +63,16 @@ export interface LoadGrammarOptions {
      * field flow through without a manual map.
      */
     languageId: string;
-    /** Contents of `highlights.scm`. Required — a grammar with no highlights is useless. */
-    highlights: string;
-    /** Contents of `injections.scm`, if the grammar supports language injection. */
-    injections?: string;
-    /** Contents of `locals.scm`, if the grammar uses local-scope queries. */
-    locals?: string;
+    /**
+     * `highlights.scm` content — either the text itself or a URL pointing
+     * at it. Required; a grammar with no highlights is useless. Bundled
+     * grammars expose this as `new URL('./.../highlights.scm', import.meta.url)`.
+     */
+    highlights: string | URL;
+    /** `injections.scm`, if the grammar supports language injection. */
+    injections?: string | URL;
+    /** `locals.scm`, if the grammar uses local-scope queries. */
+    locals?: string | URL;
     /**
      * Name of the grammar's `tree_sitter_<lang>()` export. If omitted, the
      * loader auto-detects by scanning the module's exports for a single
@@ -65,24 +82,29 @@ export interface LoadGrammarOptions {
 }
 
 /**
- * Stable shape emitted by the `@discord/arborium-rt/grammars/<lang>`
- * subpath modules. Any module whose default export satisfies this interface
- * can be handed straight to {@link Runtime.loadGrammar}: it's structurally
- * assignable to {@link LoadGrammarOptions}.
+ * Stable shape for each entry in the bundled `GRAMMARS` map exported from
+ * `@discord/arborium-rt/grammars`. Any object matching this interface is
+ * structurally assignable to {@link LoadGrammarOptions}, so it can be
+ * handed straight to {@link Runtime.loadGrammar}.
+ *
+ * Asset fields (`wasm`, `highlights`, `injections`, `locals`) are URLs
+ * pointing at the per-grammar files shipped inside this package — they're
+ * fetched lazily when `loadGrammar` runs, so listing every grammar in the
+ * map costs only a few bytes of eager metadata per language.
  */
 export interface ArboriumGrammarPackage {
     /** Grammar id from `arborium.yaml` (e.g. `"json"`, `"typescript"`). */
     languageId: string;
     /** Symbol the grammar wasm exports (always `"tree_sitter_<languageId>"`). */
     languageExport: string;
-    /** URL to the grammar SIDE_MODULE wasm, resolved against the subpath module. */
+    /** URL to the grammar SIDE_MODULE wasm, resolved against the grammars module. */
     wasm: URL;
-    /** Flattened highlights query (prepend chain + own). */
-    highlights: string;
-    /** Flattened injections query, if the grammar defines one. */
-    injections?: string;
-    /** Flattened locals query, if the grammar defines one. */
-    locals?: string;
+    /** URL to the flattened `highlights.scm` (prepend chain + own). */
+    highlights: URL;
+    /** URL to the flattened `injections.scm`, if the grammar defines one. */
+    injections?: URL;
+    /** URL to the flattened `locals.scm`, if the grammar defines one. */
+    locals?: URL;
 }
 
 /** Options shared by the highlight-pipeline entry points on {@link Session}. */
@@ -127,7 +149,14 @@ export class Runtime {
                 'loadGrammar: languageId is required (must match the name referenced by injection queries)',
             );
         }
-        const grammarBytes = await resolveWasm(options.wasm);
+        // Pull wasm bytes + query text concurrently — each can be a URL that
+        // needs fetching, and they're independent of each other.
+        const [grammarBytes, highlights, injections, locals] = await Promise.all([
+            resolveWasm(options.wasm),
+            resolveText(options.highlights),
+            options.injections === undefined ? '' : resolveText(options.injections),
+            options.locals === undefined ? '' : resolveText(options.locals),
+        ]);
         const grammarExports = await this.host.loadWebAssemblyModule(grammarBytes, {
             loadAsync: true,
         });
@@ -140,9 +169,9 @@ export class Runtime {
             );
         }
         const [nPtr, nLen] = putUtf8(this.host, options.languageId);
-        const [hPtr, hLen] = putUtf8(this.host, options.highlights);
-        const [iPtr, iLen] = putUtf8(this.host, options.injections ?? '');
-        const [lPtr, lLen] = putUtf8(this.host, options.locals ?? '');
+        const [hPtr, hLen] = putUtf8(this.host, highlights);
+        const [iPtr, iLen] = putUtf8(this.host, injections);
+        const [lPtr, lLen] = putUtf8(this.host, locals);
         let grammarId = 0;
         try {
             grammarId = this.abi.arborium_rt_register_grammar(

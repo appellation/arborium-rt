@@ -17,6 +17,7 @@ import { QUERY_TYPES, flattenAllIntoDir } from './flatten.js';
 import { packageAll } from './package-all.js';
 import { stageDist } from './stage-dist.js';
 import { Logger, paths } from './util.js';
+import { writeGrammarsIndexModule } from './write-grammars-index.js';
 import { writeLanguagesModule } from './write-languages.js';
 
 const USAGE = `\
@@ -93,8 +94,10 @@ async function cmdBuildPackage(args: readonly string[]): Promise<number> {
         return 1;
     }
     await buildPackage({ group, lang });
-    // Regenerate the languages.ts constant so it reflects the new subdir.
+    // Regenerate the languages.ts constant + grammars index so they reflect
+    // the new subdir.
     writeLanguagesModule();
+    writeGrammarsIndexModule();
     return 0;
 }
 

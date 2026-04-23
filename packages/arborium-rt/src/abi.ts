@@ -128,8 +128,8 @@ export type ArboriumErrorKind =
     | 'highlight-failed'
     /** Grammar SIDE_MODULE didn't export a `tree_sitter_*` function. */
     | 'grammar-language-export-missing'
-    /** Couldn't resolve a `URL` WasmSource (fetch failed, or file read failed). */
-    | 'wasm-fetch-failed';
+    /** Couldn't resolve a URL-valued asset (wasm or query file) — fetch failed, or file read failed. */
+    | 'asset-fetch-failed';
 
 // ---------------------------------------------------------------------------
 // Memory helpers
@@ -173,12 +173,23 @@ export type WasmSource = URL | ArrayBuffer | Uint8Array;
 
 /** Resolve a {@link WasmSource} to the bytes `loadWebAssemblyModule` expects. */
 export async function resolveWasm(source: WasmSource): Promise<Uint8Array> {
-    if (source instanceof URL) return fetchWasm(source);
+    if (source instanceof URL) return fetchAssetBytes(source);
     if (source instanceof Uint8Array) return source;
     return new Uint8Array(source);
 }
 
-async function fetchWasm(url: URL): Promise<Uint8Array> {
+/**
+ * Resolve a `string | URL` query source to its UTF-8 text. Strings are
+ * returned as-is — useful for callers that hand-assembled `.scm` content.
+ * URLs fetch (or read, under Node) and decode.
+ */
+export async function resolveText(source: string | URL): Promise<string> {
+    if (typeof source === 'string') return source;
+    const bytes = await fetchAssetBytes(source);
+    return decoder.decode(bytes);
+}
+
+async function fetchAssetBytes(url: URL): Promise<Uint8Array> {
     // `readLocalWasm` returns bytes for `file:` URLs under Node and `null`
     // otherwise. The browser variant of `#wasm-loader` (selected by the
     // `"browser"` condition in package.json's `imports` field) always
@@ -188,7 +199,7 @@ async function fetchWasm(url: URL): Promise<Uint8Array> {
     const response = await fetch(url);
     if (!response.ok) {
         throw new ArboriumError(
-            'wasm-fetch-failed',
+            'asset-fetch-failed',
             `failed to fetch ${url.href}: ${response.status} ${response.statusText}`,
         );
     }

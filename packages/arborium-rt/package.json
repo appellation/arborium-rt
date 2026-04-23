@@ -15,11 +15,7 @@
     },
     "./host-module": "./dist/host/web-tree-sitter.mjs",
     "./host-wasm": "./dist/host/web-tree-sitter.wasm",
-    "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm",
-    "./grammars/*": {
-      "types": "./dist/grammars/*/index.d.ts",
-      "import": "./dist/grammars/*/index.js"
-    }
+    "./runtime-wasm": "./dist/runtime/arborium_emscripten_runtime.wasm"
   },
   "imports": {
     "#wasm-loader": {

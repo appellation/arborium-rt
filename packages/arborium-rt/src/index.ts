@@ -31,3 +31,5 @@ export type {
 } from './types.js';
 
 export { AVAILABLE_LANGUAGES, type AvailableLanguage } from './languages.js';
+
+export { GRAMMARS, type BundledGrammarId } from './grammars.js';

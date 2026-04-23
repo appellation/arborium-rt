@@ -134,6 +134,13 @@ export async function buildHost(): Promise<void> {
             '-s', 'WASM=1',
             '-s', 'MODULARIZE=1',
             '-s', 'EXPORT_ES6=1',
+            // web,worker only — drops the Node branch that emits
+            // `await import("module")` and bare `require("fs"|"path"|"url"|"crypto")`
+            // calls, which rspack/webpack static-analyze and reject. The
+            // runtime loader pre-fetches the host wasm via resolveWasm and
+            // hands it to the factory as `Module.wasmBinary`, so Node tests
+            // don't rely on the dropped fs-based auto-loader.
+            '-s', 'ENVIRONMENT=web,worker',
             '-s', 'INITIAL_MEMORY=33554432',
             '-s', 'ALLOW_MEMORY_GROWTH=1',
             '-s', 'SUPPORT_BIG_ENDIAN=1',

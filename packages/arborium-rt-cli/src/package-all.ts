@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { buildGrammarIndex } from './arborium-yaml.js';
 import { buildPackage } from './build-package.js';
 import { Logger, paths, runPool } from './util.js';
+import { writeGrammarsIndexModule } from './write-grammars-index.js';
 import { writeLanguagesModule } from './write-languages.js';
 
 export interface PackageAllArgs {
@@ -70,6 +71,7 @@ export async function packageAll(args: PackageAllArgs = {}): Promise<PackageAllR
     // One regeneration after every subdir is written — avoids the write
     // race that per-grammar calls would have under parallelism.
     writeLanguagesModule();
+    writeGrammarsIndexModule();
 
     root.step(`regenerated ${ok.length}/${targets.length} grammar subpath(s)`);
     if (failed.length > 0) {
