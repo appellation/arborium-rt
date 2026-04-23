@@ -19,6 +19,7 @@ import { join, relative } from 'node:path';
 import { buildGrammarIndex } from './arborium-yaml.js';
 import { QUERY_TYPES, type QueryType } from './flatten.js';
 import { paths, step } from './util.js';
+import { writeLanguagesModule } from './write-languages.js';
 
 export interface BuildPackageArgs {
     group: string;
@@ -73,6 +74,8 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
         const size = statSync(join(outDir, name)).size;
         console.error(`    ${size.toString().padStart(9)}  ${name}`);
     }
+
+    writeLanguagesModule();
 }
 
 function renderIndexJs(

@@ -36,7 +36,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "pretest": "tsc && node ../arborium-rt-cli/dist/main.js stage-dist && node ../arborium-rt-cli/dist/main.js package-all --only json",
+    "pretest": "node ../arborium-rt-cli/dist/main.js package-all --only json && tsc && node ../arborium-rt-cli/dist/main.js stage-dist",
     "test": "vitest run"
   },
   "devDependencies": {

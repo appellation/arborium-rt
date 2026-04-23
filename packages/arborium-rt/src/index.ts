@@ -29,3 +29,5 @@ export type {
     HtmlFormat,
     Edit,
 } from './types.js';
+
+export { AVAILABLE_LANGUAGES, type AvailableLanguage } from './languages.js';
