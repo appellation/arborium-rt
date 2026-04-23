@@ -28,7 +28,11 @@ export async function bootstrap(): Promise<void> {
         '-C', p.repoRoot,
         'submodule', 'update', '--init', '--force', 'third_party/arborium',
     ]);
-    await run(log, 'git', ['-C', p.submoduleRoot, 'clean', '-fd']);
+    // `-x` also removes gitignored files — our patches produce some (e.g.,
+    // arborium-theme/src/builtin_generated.rs) that the submodule's own
+    // .gitignore covers, so a plain `clean -fd` leaves them behind and the
+    // next bootstrap's `git apply` fails with "already exists".
+    await run(log, 'git', ['-C', p.submoduleRoot, 'clean', '-fdx']);
 
     const patches = readdirSync(p.patchesDir)
         .filter((name) => name.endsWith('.patch'))

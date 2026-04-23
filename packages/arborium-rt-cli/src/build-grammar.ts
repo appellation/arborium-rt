@@ -3,6 +3,7 @@
 
 import {
     copyFileSync,
+    cpSync,
     existsSync,
     mkdirSync,
     readdirSync,
@@ -50,7 +51,12 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
 
     const index = args.index ?? buildGrammarIndex(p.langsRoot);
     const currentEntry = index.get(args.lang);
-    const cSymbol = currentEntry?.grammar.c_symbol ?? args.lang;
+    // tree-sitter's codegen replaces non-alphanumerics in the grammar name
+    // with `_` when emitting `tree_sitter_<symbol>`, so a lang id like
+    // `c-sharp` produces the symbol `c_sharp`. Mirror that here for the
+    // fallback, otherwise `EXPORTED_FUNCTIONS=_tree_sitter_c-sharp` is an
+    // invalid C identifier and the link fails.
+    const cSymbol = currentEntry?.grammar.c_symbol ?? args.lang.replace(/-/g, '_');
 
     // --- stage npm deps -------------------------------------------------------
     //
@@ -69,8 +75,23 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
         : undefined;
 
     // --- generate parser.c ----------------------------------------------------
+    //
+    // Pre-create buildDir/src/ so grammar.js prelude scripts that emit files
+    // cwd-relative (e.g., vim's keywords.js does `writeFileSync('src/keywords.h')`)
+    // find the directory ready. tree-sitter generate itself doesn't need it.
+    mkdirSync(join(buildDir, 'src'), { recursive: true });
+
+    // Stage grammar source into a nested layout so `require('../<subdir>/...')`
+    // from grammar.js resolves. Some upstream grammars (markdown, several
+    // multi-language ones) expect shared helper dirs to be siblings of the
+    // grammar dir. arborium vendors them in one of two ways:
+    //   - upstream layout: `def/common/` alongside `def/grammar/` (asciidoc)
+    //   - flattened layout: `def/grammar/common/` tucked inside (markdown)
+    // Stage both views so either pattern resolves.
+    const stagedGrammarJs = stageGrammarSource(defDir, buildDir);
+
     log.step(`generating parser.c from ${relative(p.repoRoot, grammarJs)}`);
-    await run(log, 'tree-sitter', ['generate', grammarJs], {
+    await run(log, 'tree-sitter', ['generate', stagedGrammarJs], {
         cwd: buildDir,
         ...(runEnv ? { env: runEnv } : {}),
     });
@@ -91,9 +112,9 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
         scannerCxx = join(grammarDir, 'scanner.cpp');
     }
 
-    // Copy grammar-shipped headers (e.g., TSX/TS's common/scanner.h) into
-    // src/ so `#include "common/scanner.h"` resolves during compile.
-    copyHeaders(grammarDir, join(buildDir, 'src'));
+    // Copy grammar-shipped headers + auxiliary C/C++ sources into src/ so
+    // scanner.c's `#include`s resolve during compile.
+    copySupportFiles(grammarDir, join(buildDir, 'src'));
 
     // --- compile --------------------------------------------------------------
     const commonCflags = ['-O2', '-fPIC', '-I', 'src'];
@@ -209,16 +230,70 @@ function stageNpmDeps(
     walk(start);
 }
 
-/** Recursively copy `*.h` files from `src` into `dst`, preserving structure. */
-function copyHeaders(src: string, dst: string): void {
+/**
+ * Stage a copy of the grammar directory under `<buildDir>/grammar-stage/`
+ * in a nested layout that satisfies both `./<x>` and `../<x>` relative
+ * requires from grammar.js. Returns the absolute path to the staged
+ * grammar.js.
+ *
+ *   <buildDir>/grammar-stage/
+ *     grammar/       <- full copy of def/grammar/
+ *       grammar.js   <- run tree-sitter generate against this copy
+ *       ...
+ *     <sibling>/     <- each non-`grammar` subdir of def/ copied here
+ *                       (upstream-style layout: e.g., asciidoc's
+ *                       `def/common/common.js`)
+ *     <nested>/      <- each subdir of def/grammar/ ALSO copied here
+ *                       (flattened vendoring: e.g., markdown's
+ *                       `def/grammar/common/common.js` read as
+ *                       `../common/common.js` from grammar.js)
+ *
+ * If both passes contribute a dir with the same name, the second pass
+ * (nested → sibling) merges into the first via cpSync's default force.
+ */
+function stageGrammarSource(defDir: string, buildDir: string): string {
+    const stageRoot = join(buildDir, 'grammar-stage');
+    const stageGrammar = join(stageRoot, 'grammar');
+    const grammarDir = join(defDir, 'grammar');
+
+    // Full copy of the grammar dir into stage/grammar/.
+    cpSync(grammarDir, stageGrammar, { recursive: true });
+
+    // Pass 1: def/'s non-grammar subdirs become siblings of stage/grammar/.
+    for (const entry of readdirSync(defDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === 'grammar') continue;
+        cpSync(join(defDir, entry.name), join(stageRoot, entry.name), { recursive: true });
+    }
+
+    // Pass 2: def/grammar/'s own subdirs also become siblings, merging with
+    // whatever pass 1 already wrote under the same name.
+    for (const entry of readdirSync(grammarDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        cpSync(join(grammarDir, entry.name), join(stageRoot, entry.name), { recursive: true });
+    }
+
+    return join(stageGrammar, 'grammar.js');
+}
+
+/**
+ * Recursively copy grammar-shipped C/C++ support files into the build dir's
+ * `src/` so scanner.c's `#include`s resolve. Covers headers (.h/.hpp) and
+ * auxiliary sources that scanners pull in as textual includes (e.g., yaml's
+ * `schema.core.c` / `schema.json.c` / `schema.legacy.c`). parser.c is
+ * deliberately excluded — we generate that fresh from grammar.js.
+ */
+function copySupportFiles(src: string, dst: string): void {
     if (!existsSync(src)) return;
     for (const entry of readdirSync(src, { withFileTypes: true })) {
         const full = join(src, entry.name);
         if (entry.isDirectory()) {
-            copyHeaders(full, join(dst, entry.name));
-        } else if (entry.isFile() && entry.name.endsWith('.h')) {
-            mkdirSync(dst, { recursive: true });
-            copyFileSync(full, join(dst, entry.name));
+            copySupportFiles(full, join(dst, entry.name));
+            continue;
         }
+        if (!entry.isFile()) continue;
+        if (entry.name === 'parser.c') continue;
+        if (!/\.(h|hpp|c|cc|cpp)$/.test(entry.name)) continue;
+        mkdirSync(dst, { recursive: true });
+        copyFileSync(full, join(dst, entry.name));
     }
 }
