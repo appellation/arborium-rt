@@ -231,12 +231,16 @@ pub unsafe extern "C" fn arborium_rt_highlight_to_html(
         let mut reg = registry().lock().expect("registry poisoned");
         highlight_to_html(&mut reg, session_id, max_injection_depth, format)
     };
-    let html = match outcome {
+    let html_output = match outcome {
         Ok(s) => s,
         Err(crate::highlight::HighlightError::UnknownSession) => return 1,
         Err(crate::highlight::HighlightError::Parse) => return 2,
     };
-    unsafe { write_bytes_out(html.as_bytes(), out_ptr, out_len) }
+    let json = match serde_json::to_vec(&html_output) {
+        Ok(v) => v,
+        Err(_) => return 3,
+    };
+    unsafe { write_bytes_out(&json, out_ptr, out_len) }
 }
 
 /// Return an output buffer previously handed out by any

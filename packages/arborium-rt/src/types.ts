@@ -47,6 +47,21 @@ export interface ThemedSpan {
 /** Wire shape of `arborium_rt_highlight_to_spans_utf16`'s JSON payload. */
 export interface ThemedHighlightResult {
     spans: ThemedSpan[];
+    /**
+     * Languages referenced by injection queries but not loaded in the registry.
+     * The TypeScript wrapper uses this to auto-load missing grammars and retry.
+     */
+    missing_injections: string[];
+}
+
+/** Wire shape of `arborium_rt_highlight_to_html`'s JSON payload. */
+export interface HtmlHighlightResult {
+    html: string;
+    /**
+     * Languages referenced by injection queries but not loaded in the registry.
+     * The TypeScript wrapper uses this to auto-load missing grammars and retry.
+     */
+    missing_injections: string[];
 }
 
 /**

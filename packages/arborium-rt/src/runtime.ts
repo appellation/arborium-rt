@@ -13,6 +13,7 @@ import {
 } from './abi.js';
 import type {
     HtmlFormat,
+    HtmlHighlightResult,
     ThemedHighlightResult,
     ThemedSpan,
     Utf16ParseResult,
@@ -123,6 +124,28 @@ export interface HighlightOptions {
 export interface HighlightToHtmlOptions extends HighlightOptions {
     /** HTML markup style. Defaults to `{ kind: 'custom-elements' }`. */
     format?: HtmlFormat;
+}
+
+/** Result from {@link Session.highlightToSpans} including any missing injection grammars. */
+export interface HighlightSpansResult {
+    /** The themed spans with UTF-16 offsets. */
+    spans: ThemedSpan[];
+    /**
+     * Languages referenced by injection queries but not loaded in the registry.
+     * If non-empty, the caller may want to load these grammars and retry.
+     */
+    missingInjections: string[];
+}
+
+/** Result from {@link Session.highlightToHtml} including any missing injection grammars. */
+export interface HighlightHtmlResult {
+    /** The rendered HTML string. */
+    html: string;
+    /**
+     * Languages referenced by injection queries but not loaded in the registry.
+     * If non-empty, the caller may want to load these grammars and retry.
+     */
+    missingInjections: string[];
 }
 
 /**
@@ -290,11 +313,15 @@ export class Session {
     /**
      * Full highlight pipeline as themed spans: parse + recursive injection
      * resolution + dedup + coalesce + capture→tag mapping, UTF-16 offsets.
+     *
+     * Returns both the spans and any languages that were referenced by injection
+     * queries but not loaded. The caller can check `missingInjections` and decide
+     * whether to load those grammars and retry.
      */
-    highlightToSpans(options: HighlightOptions = {}): ThemedSpan[] {
+    highlightToSpans(options: HighlightOptions = {}): HighlightSpansResult {
         this.#assertLive();
         const depth = options.maxInjectionDepth ?? 3;
-        return this.#withJsonOutput(
+        const result = this.#withJsonOutput(
             'highlight-failed',
             (outPtr, outLen) =>
                 this.grammar.runtime.abi.arborium_rt_highlight_to_spans_utf16(
@@ -304,18 +331,27 @@ export class Session {
                     outLen,
                 ),
             (json) => {
-                if (json.length === 0) return [];
-                return (JSON.parse(json) as ThemedHighlightResult).spans;
+                if (json.length === 0) return { spans: [], missing_injections: [] };
+                return JSON.parse(json) as ThemedHighlightResult;
             },
         );
+
+        return {
+            spans: result.spans,
+            missingInjections: result.missing_injections,
+        };
     }
 
     /**
      * Full highlight pipeline rendered straight to HTML. Matches
      * `arborium_highlight::spans_to_html` output byte-for-byte for the same
      * format + source.
+     *
+     * Returns both the HTML and any languages that were referenced by injection
+     * queries but not loaded. The caller can check `missingInjections` and decide
+     * whether to load those grammars and retry.
      */
-    highlightToHtml(options: HighlightToHtmlOptions = {}): string {
+    highlightToHtml(options: HighlightToHtmlOptions = {}): HighlightHtmlResult {
         this.#assertLive();
         const depth = options.maxInjectionDepth ?? 3;
         const format = options.format ?? { kind: 'custom-elements' };
@@ -323,7 +359,7 @@ export class Session {
         const { code, prefix } = encodeHtmlFormat(format);
         const [prefixPtr, prefixLen] = putUtf8(host, prefix);
         try {
-            return this.#withJsonOutput(
+            const result = this.#withJsonOutput(
                 'highlight-failed',
                 (outPtr, outLen) =>
                     this.grammar.runtime.abi.arborium_rt_highlight_to_html(
@@ -335,8 +371,16 @@ export class Session {
                         outPtr,
                         outLen,
                     ),
-                (html) => html,
+                (json) => {
+                    if (json.length === 0) return { html: '', missing_injections: [] };
+                    return JSON.parse(json) as HtmlHighlightResult;
+                },
             );
+
+            return {
+                html: result.html,
+                missingInjections: result.missing_injections,
+            };
         } finally {
             if (prefixPtr) host._free(prefixPtr);
         }

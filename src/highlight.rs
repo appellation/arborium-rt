@@ -13,7 +13,7 @@
 //! `arborium_highlight::spans_to_html` so HTML output stays lock-step with
 //! the native Rust highlighter.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use arborium_highlight::{HtmlFormat, Span, spans_to_html};
 use arborium_theme::tag_for_capture;
@@ -49,6 +49,17 @@ pub(crate) struct WireThemedSpan {
 #[derive(Serialize)]
 pub(crate) struct WireThemedOutput {
     pub spans: Vec<WireThemedSpan>,
+    /// Languages referenced by injection queries but not loaded in the
+    /// registry. JavaScript can use this to auto-load grammars and retry.
+    pub missing_injections: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WireHtmlOutput {
+    pub html: String,
+    /// Languages referenced by injection queries but not loaded in the
+    /// registry. JavaScript can use this to auto-load grammars and retry.
+    pub missing_injections: Vec<String>,
 }
 
 pub(crate) fn highlight_to_themed_utf16(
@@ -56,16 +67,22 @@ pub(crate) fn highlight_to_themed_utf16(
     session_id: u32,
     max_depth: u32,
 ) -> Result<WireThemedOutput, HighlightError> {
-    let (source, raw_spans) = collect_spans(reg, session_id, max_depth)?;
+    let (source, raw_spans, missing) = collect_spans(reg, session_id, max_depth)?;
 
     let themed_byte = dedup_and_tag(raw_spans);
     if themed_byte.is_empty() {
-        return Ok(WireThemedOutput { spans: Vec::new() });
+        return Ok(WireThemedOutput {
+            spans: Vec::new(),
+            missing_injections: missing.into_iter().collect(),
+        });
     }
     let coalesced = coalesce_by_tag(themed_byte);
     let spans = byte_spans_to_utf16(&source, coalesced);
 
-    Ok(WireThemedOutput { spans })
+    Ok(WireThemedOutput {
+        spans,
+        missing_injections: missing.into_iter().collect(),
+    })
 }
 
 pub(crate) fn highlight_to_html(
@@ -73,19 +90,24 @@ pub(crate) fn highlight_to_html(
     session_id: u32,
     max_depth: u32,
     format: HtmlFormat,
-) -> Result<String, HighlightError> {
-    let (source, raw_spans) = collect_spans(reg, session_id, max_depth)?;
-    Ok(spans_to_html(&source, raw_spans, &format))
+) -> Result<WireHtmlOutput, HighlightError> {
+    let (source, raw_spans, missing) = collect_spans(reg, session_id, max_depth)?;
+    Ok(WireHtmlOutput {
+        html: spans_to_html(&source, raw_spans, &format),
+        missing_injections: missing.into_iter().collect(),
+    })
 }
 
 /// Walk the primary session + injections recursively. Returns the primary
-/// source text (for HTML emission / UTF-16 conversion) and the full set of
-/// raw spans with UTF-8 byte offsets anchored to the primary document.
+/// source text (for HTML emission / UTF-16 conversion), the full set of
+/// raw spans with UTF-8 byte offsets anchored to the primary document, and
+/// a set of language names that were referenced by injections but not found
+/// in the registry.
 fn collect_spans(
     reg: &mut Registry,
     session_id: u32,
     max_depth: u32,
-) -> Result<(String, Vec<Span>), HighlightError> {
+) -> Result<(String, Vec<Span>, HashSet<String>), HighlightError> {
     let (primary_gid, primary_inner, source) = {
         let entry = reg
             .session(session_id)
@@ -94,6 +116,7 @@ fn collect_spans(
     };
 
     let mut all_spans: Vec<Span> = Vec::new();
+    let mut missing_injections: HashSet<String> = HashSet::new();
 
     let primary_injections = {
         let grammar = reg
@@ -116,10 +139,18 @@ fn collect_spans(
 
     let depth = max_depth.min(MAX_INJECTION_DEPTH);
     if depth > 0 {
-        process_injections(reg, &source, primary_injections, 0, depth, &mut all_spans);
+        process_injections(
+            reg,
+            &source,
+            primary_injections,
+            0,
+            depth,
+            &mut all_spans,
+            &mut missing_injections,
+        );
     }
 
-    Ok((source, all_spans))
+    Ok((source, all_spans, missing_injections))
 }
 
 fn process_injections(
@@ -129,6 +160,7 @@ fn process_injections(
     base_offset: u32,
     remaining_depth: u32,
     all_spans: &mut Vec<Span>,
+    missing_injections: &mut HashSet<String>,
 ) {
     if remaining_depth == 0 {
         return;
@@ -144,6 +176,8 @@ fn process_injections(
             continue;
         }
         let Some(inj_gid) = reg.grammar_id_by_name(&inj.language) else {
+            // Grammar not loaded — record the name and skip this injection.
+            missing_injections.insert(inj.language.clone());
             continue;
         };
 
@@ -182,6 +216,7 @@ fn process_injections(
                 shift,
                 remaining_depth - 1,
                 all_spans,
+                missing_injections,
             );
         }
     }
