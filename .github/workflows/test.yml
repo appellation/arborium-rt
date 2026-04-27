@@ -73,6 +73,24 @@ jobs:
       - name: Stage themes and wasms into dist/
         run: ./scripts/arborium-rt stage
 
+      - name: Annotate wasm sizes
+        run: |
+          {
+            echo "## Built wasm sizes"
+            echo ""
+            echo "| File | Size |"
+            echo "|------|------|"
+            find target/wasm32-unknown-emscripten/release/arborium_emscripten_runtime.wasm \
+                 target/host-wasm/web-tree-sitter.wasm \
+                 target/grammars -name '*.wasm' \
+              | sort \
+              | while read -r f; do
+                  bytes=$(stat -c %s "$f")
+                  human=$(numfmt --to=iec-i --suffix=B --format='%.2f' "$bytes")
+                  printf '| `%s` | %s (%s bytes) |\n' "$f" "$human" "$bytes"
+                done
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build TypeScript packages
         run: pnpm -r build
 
