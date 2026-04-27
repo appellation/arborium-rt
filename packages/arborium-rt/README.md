@@ -53,13 +53,12 @@ The bundled `GRAMMARS` entries use URLs for all of those fields, so listing
 every grammar costs only a few bytes of eager metadata; the bytes don't
 load until you call `loadGrammar`.
 
-## Bundle size + rspack filter
+## Bundle size
 
 Because `GRAMMARS` names every language statically, a naïve rspack/webpack
 build will emit every grammar's `.wasm` + `.scm` (around 160 MB total).
-Install `@discord/arborium-rt-plugin-rspack` and pass an `allow` or `deny`
-list to strip entries at build time — see the repo-root README or the
-plugin's package for details.
+Bundlers that tree-shake based on referenced entries will only pull in
+the grammars you actually load; otherwise expect the full asset set.
 
 ## API shape
 

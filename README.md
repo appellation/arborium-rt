@@ -128,43 +128,13 @@ Layout inside the package:
 `locals`) as either a raw string or a `URL` — URLs are fetched under
 browsers and read from disk under Node.
 
-### Filtering bundled grammars (rspack / rsbuild)
+### Bundle size
 
-Because `GRAMMARS` references every language's assets statically, an
-unfiltered rspack build will emit ~160 MB of `.wasm` + `.scm` even if
-the consumer only uses a handful. Install the companion plugin and
-pass an `allow` or `deny` list to strip entries before rspack traces
-the URLs:
-
-```sh
-npm install @discord/arborium-rt-plugin-rspack
-```
-
-```ts
-// rspack.config.ts / rsbuild.config.ts
-import { ArboriumRtRspackPlugin } from "@discord/arborium-rt-plugin-rspack";
-
-export default {
-  // rspack
-  plugins: [
-    new ArboriumRtRspackPlugin({ allow: ["json", "rust", "typescript"] }),
-  ],
-
-  // …or, under rsbuild:
-  tools: {
-    rspack: {
-      plugins: [
-        new ArboriumRtRspackPlugin({ deny: ["groovy", "svelte"] }),
-      ],
-    },
-  },
-};
-```
-
-Typical savings: **164 MB → 4.9 MB** when allow-listing three languages.
-No runtime-side changes required — the plugin rewrites
-`dist/grammars.js` at load time, so the URLs that rspack emits as
-assets are exactly the set that survives the filter.
+Because `GRAMMARS` references every language's assets statically, a
+naive bundler trace will emit ~160 MB of `.wasm` + `.scm` even if the
+consumer only uses a handful. If your bundler can tree-shake based on
+which entries you actually reference, you'll only pay for the grammars
+you load. Otherwise, expect the full asset set.
 
 ## Raw ABI
 
