@@ -32,10 +32,17 @@ jobs:
         with:
           cache-on-failure: true
 
-      - uses: mymindstorm/setup-emsdk@v14
-        with:
-          version: 4.0.15
-          actions-cache-folder: emsdk-cache
+      - name: Install emsdk 4.0.15
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$HOME/emsdk"
+          "$HOME/emsdk/emsdk" install 4.0.15
+          "$HOME/emsdk/emsdk" activate 4.0.15
+          source "$HOME/emsdk/emsdk_env.sh"
+          echo "EMSDK=$EMSDK" >> "$GITHUB_ENV"
+          echo "EMSDK_NODE=$EMSDK_NODE" >> "$GITHUB_ENV"
+          echo "$EMSDK" >> "$GITHUB_PATH"
+          echo "$EMSDK/upstream/emscripten" >> "$GITHUB_PATH"
+          emcc --version
 
       - name: Install tree-sitter CLI
         env:
