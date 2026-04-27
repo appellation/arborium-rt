@@ -3,10 +3,28 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+import spdxSatisfies from 'spdx-satisfies';
 import { parse as parseYaml } from 'yaml';
+
+const ALLOWED_LICENSES = [
+    'CC0-1.0',
+    'MIT',
+    'Apache-2.0',
+    'Unlicense',
+    'ISC',
+    'Apache-2.0 WITH LLVM-exception',
+];
+
+const DISABLED_GRAMMARS = new Set<string>([
+    'cobol', // has performance issues
+    'nginx', // GPL licensed
+    'uiua', // MPL licensed
+])
+
 
 export interface ArboriumYaml {
     grammars?: ArboriumGrammar[];
+    license?: string;
 }
 
 export interface ArboriumGrammar {
@@ -62,6 +80,15 @@ export function buildGrammarIndex(
             } catch {
                 continue; // non-def dir, or missing/unreadable yaml
             }
+
+            if (doc.grammars?.some(grammar => grammar.id && DISABLED_GRAMMARS.has(grammar.id))) {
+                continue;
+            }
+
+            if (!doc.license || !spdxSatisfies(doc.license, ALLOWED_LICENSES)) {
+                continue;
+            }
+
             for (const grammar of doc.grammars ?? []) {
                 if (grammar.id) {
                     index.set(grammar.id, { defPath, group: group.name, grammar });
