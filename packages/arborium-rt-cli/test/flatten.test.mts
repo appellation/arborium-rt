@@ -17,7 +17,7 @@ import { flattenQuery } from '../src/flatten.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..');
 const langsRoot = resolve(repoRoot, 'third_party', 'arborium', 'langs');
-const index = buildGrammarIndex(langsRoot);
+const index = buildGrammarIndex([langsRoot]);
 
 function lineCount(s: string): number {
     return s.split('\n').length;
