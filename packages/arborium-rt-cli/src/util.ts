@@ -60,6 +60,18 @@ export interface Paths {
   readonly repoRoot: string;
   readonly submoduleRoot: string;
   readonly langsRoot: string;
+  /**
+   * Repo-local langs root. Holds grammar definitions vendored directly
+   * into arborium-rt rather than the arborium submodule — used when we
+   * need a grammar (e.g. `markdown_inline`) that arborium itself doesn't
+   * package. Scanned alongside `langsRoot`; ids defined here shadow
+   * upstream ones on collision.
+   */
+  readonly localLangsRoot: string;
+  /**
+   * Both langs roots in scan order. Pass to `buildGrammarIndex`.
+   */
+  readonly langsRoots: readonly string[];
   /** Patches applied to the arborium submodule by `bootstrap`. */
   readonly arboriumPatchesDir: string;
   /**
@@ -96,10 +108,14 @@ export interface Paths {
 
 export function paths(repoRoot: string = findRepoRoot()): Paths {
   const treeSitterRoot = join(repoRoot, "third_party", "tree-sitter");
+  const langsRoot = join(repoRoot, "third_party", "arborium", "langs");
+  const localLangsRoot = join(repoRoot, "langs");
   return {
     repoRoot,
     submoduleRoot: join(repoRoot, "third_party", "arborium"),
-    langsRoot: join(repoRoot, "third_party", "arborium", "langs"),
+    langsRoot,
+    localLangsRoot,
+    langsRoots: [langsRoot, localLangsRoot],
     bindingRoot: join(
       repoRoot,
       "third_party",

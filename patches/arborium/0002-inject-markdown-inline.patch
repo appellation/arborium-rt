@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Tue, 28 Apr 2026 00:00:00 +0000
+Subject: [PATCH] Inject markdown_inline into block markdown's (inline) nodes
+
+The upstream tree-sitter-markdown repo ships the grammar split into a
+block-level package (`tree-sitter-markdown`, vendored here) and a
+companion inline-level package (`tree-sitter-markdown-inline`, not
+vendored). Bold/italic/inline-code/link-text are nodes in the inline
+grammar; the block grammar exposes their text as opaque `(inline)`
+nodes.
+
+arborium-rt vendors the inline grammar locally under
+`langs/group-willow/markdown-inline/` (outside this submodule) and
+registers it under the id `markdown_inline`. This patch wires the two
+together by adding the standard nvim-treesitter injection.
+
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+---
+ langs/group-willow/markdown/def/queries/injections.scm | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/langs/group-willow/markdown/def/queries/injections.scm b/langs/group-willow/markdown/def/queries/injections.scm
+--- a/langs/group-willow/markdown/def/queries/injections.scm
++++ b/langs/group-willow/markdown/def/queries/injections.scm
+@@ -11,3 +11,4 @@
+
+ ((plus_metadata) @injection.content (#set! injection.language "toml"))
+
++((inline) @injection.content (#set! injection.language "markdown_inline"))

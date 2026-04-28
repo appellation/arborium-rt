@@ -20,7 +20,7 @@ interface Entry {
 
 export function writeGrammarsIndexModule(): void {
   const p = paths();
-  const index = buildGrammarIndex(p.langsRoot);
+  const index = buildGrammarIndex(p.langsRoots);
   const entries = scanEntries(p.packagesOut, index);
 
   writeFileSync(

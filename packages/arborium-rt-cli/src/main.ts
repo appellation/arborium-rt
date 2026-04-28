@@ -164,7 +164,7 @@ async function cmdListGroups(args: readonly string[]): Promise<number> {
         options: { json: { type: 'boolean', default: false } },
     });
     const p = paths();
-    const index = buildGrammarIndex(p.langsRoot);
+    const index = buildGrammarIndex(p.langsRoots);
     const groups = [...new Set([...index.values()].map((e) => e.group))].sort();
     if (values.json) {
         process.stdout.write(`${JSON.stringify(groups)}\n`);
@@ -184,7 +184,7 @@ async function cmdFlatten(args: readonly string[]): Promise<number> {
     const p = paths();
     const log = new Logger(lang);
     const outDir = join(p.grammarsOut, lang);
-    const index = buildGrammarIndex(p.langsRoot);
+    const index = buildGrammarIndex(p.langsRoots);
     flattenAllIntoDir(lang, index, outDir);
     log.step(`wrote flattened queries to ${outDir} (${QUERY_TYPES.join(', ')})`);
     return 0;

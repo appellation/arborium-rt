@@ -1,0 +1,12 @@
+repo: https://github.com/tree-sitter-grammars/tree-sitter-markdown
+commit: 2dfd57f547f06ca5631a80f601e129d73fc8e9f0
+license: MIT
+
+grammars:
+  - id: markdown_inline
+    name: Markdown (inline)
+    tag: markup
+    tier: 2
+    has_scanner: true
+
+    description: "Inline-level grammar for Markdown — emphasis, strong emphasis, inline code, links, autolinks, and HTML/LaTeX tags. Companion to the block-level `markdown` grammar; injected into its `(inline)` nodes."

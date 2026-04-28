@@ -35,7 +35,7 @@ export interface BuildAllResult {
 
 export async function buildAll(args: BuildAllArgs = {}): Promise<BuildAllResult> {
     const p = paths();
-    const index = buildGrammarIndex(p.langsRoot);
+    const index = buildGrammarIndex(p.langsRoots);
 
     let targets = (args.only && args.only.length > 0)
         ? args.only.filter((id) => index.has(id))

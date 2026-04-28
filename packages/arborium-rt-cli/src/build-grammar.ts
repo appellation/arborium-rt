@@ -28,7 +28,14 @@ export interface BuildGrammarArgs {
 export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
   const p = paths();
   const log = args.log ?? new Logger(args.lang);
-  const defDir = join(p.langsRoot, args.group, args.lang, "def");
+  const index = args.index ?? buildGrammarIndex(p.langsRoots);
+  const currentEntry = index.get(args.lang);
+  if (!currentEntry) {
+    throw new Error(
+      `grammar id ${args.lang} not found in index (scanned ${p.langsRoots.join(", ")})`,
+    );
+  }
+  const defDir = currentEntry.defPath;
   const grammarDir = join(defDir, "grammar");
   const grammarJs = join(grammarDir, "grammar.js");
   if (!existsSync(grammarJs)) {
@@ -49,9 +56,7 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
   rmSync(buildDir, { recursive: true, force: true });
   mkdirSync(buildDir, { recursive: true });
 
-  const index = args.index ?? buildGrammarIndex(p.langsRoot);
-  const currentEntry = index.get(args.lang);
-  const cSymbol = normalizeCSymbol(currentEntry?.grammar.c_symbol, args.lang);
+  const cSymbol = normalizeCSymbol(currentEntry.grammar.c_symbol, args.lang);
 
   // --- stage npm deps -------------------------------------------------------
   //
@@ -61,9 +66,7 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
   // `node_modules/` with symlinks to the vendored dep grammars' def/grammar/
   // dirs, and expose it via NODE_PATH so Node's resolution finds them even
   // though the grammar.js lives at a different path.
-  if (currentEntry) {
-    stageNpmDeps(currentEntry, index, buildDir, log);
-  }
+  stageNpmDeps(currentEntry, index, buildDir, log);
   const nodeModules = join(buildDir, "node_modules");
   const runEnv = existsSync(nodeModules)
     ? { NODE_PATH: nodeModules }

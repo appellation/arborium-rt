@@ -27,7 +27,7 @@ export interface PackageAllResult {
 
 export async function packageAll(args: PackageAllArgs = {}): Promise<PackageAllResult> {
     const p = paths();
-    const index = buildGrammarIndex(p.langsRoot);
+    const index = buildGrammarIndex(p.langsRoots);
 
     if (!existsSync(p.grammarsOut)) {
         throw new Error(

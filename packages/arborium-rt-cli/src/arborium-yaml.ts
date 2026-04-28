@@ -1,6 +1,6 @@
 // Typed reader for the arborium submodule's `langs/*/*/def/arborium.yaml`.
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { type Dirent, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 import spdxSatisfies from 'spdx-satisfies';
@@ -65,10 +65,31 @@ export interface GrammarIndexEntry {
 }
 
 export function buildGrammarIndex(
-    langsRoot: string,
+    roots: readonly string[],
 ): Map<string, GrammarIndexEntry> {
     const index = new Map<string, GrammarIndexEntry>();
-    for (const group of readdirSync(langsRoot, { withFileTypes: true })) {
+    for (const root of roots) {
+        scanRoot(root, index);
+    }
+    return index;
+}
+
+/**
+ * Scan a single langs root and merge its entries into `index`. Later roots
+ * shadow earlier ones on id collision, which lets a repo-local lang dir
+ * override an arborium-vendored grammar with the same id.
+ */
+function scanRoot(
+    langsRoot: string,
+    index: Map<string, GrammarIndexEntry>,
+): void {
+    let groups: Dirent[];
+    try {
+        groups = readdirSync(langsRoot, { withFileTypes: true });
+    } catch {
+        return; // root doesn't exist (e.g. local langs not yet populated)
+    }
+    for (const group of groups) {
         if (!group.isDirectory()) continue;
         const groupPath = join(langsRoot, group.name);
         for (const lang of readdirSync(groupPath, { withFileTypes: true })) {
@@ -96,5 +117,4 @@ export function buildGrammarIndex(
             }
         }
     }
-    return index;
 }
