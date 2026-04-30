@@ -103,11 +103,11 @@ index abf0eee..8059724 100644
 +        // one match.next() call is grinding through quadratic state-pool
 +        // transitions.
 +        //
-+        // 100 ms is generous: > 6× a 16 ms frame budget, but 30× under the
++        // 300 ms is generous: > 6× a 16 ms frame budget, but 10× under the
 +        // current attack cost. Hardcoded for now; if a caller needs more
 +        // headroom (large legitimate file, slow machine), we can plumb
 +        // this through `set_text` later.
-+        const QUERY_BUDGET: Duration = Duration::from_millis(100);
++        const QUERY_BUDGET: Duration = Duration::from_millis(300);
 +        let deadline = Instant::now() + QUERY_BUDGET;
 +        let timed_out = core::cell::Cell::new(false);
 +        let timed_out_ref = &timed_out;
