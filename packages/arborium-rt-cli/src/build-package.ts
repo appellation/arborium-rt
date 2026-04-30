@@ -46,6 +46,13 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
         );
     }
 
+    const licenseSrc = join(grammarDir, 'LICENSE');
+    if (!existsSync(licenseSrc)) {
+        throw new Error(
+            `${licenseSrc} not found. run \`arborium-rt build-grammar ${args.group} ${args.lang}\` first to fetch the upstream LICENSE.`,
+        );
+    }
+
     const queries: Partial<Record<QueryType, string>> = {};
     for (const qtype of QUERY_TYPES) {
         const src = join(grammarDir, `${qtype}.scm`);
@@ -58,12 +65,17 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
     mkdirSync(outDir, { recursive: true });
 
     copyFileSync(wasmSrc, join(outDir, wasmName));
+    copyFileSync(licenseSrc, join(outDir, 'LICENSE'));
     for (const [qtype, content] of Object.entries(queries)) {
         writeFileSync(join(outDir, `${qtype}.scm`), content);
     }
 
     log.step(`wrote grammars/${args.lang} to ${relative(p.repoRoot, outDir)}`);
-    const files = [wasmName, ...QUERY_TYPES.filter((q) => queries[q] !== undefined).map((q) => `${q}.scm`)];
+    const files = [
+        wasmName,
+        'LICENSE',
+        ...QUERY_TYPES.filter((q) => queries[q] !== undefined).map((q) => `${q}.scm`),
+    ];
     for (const name of files) {
         const size = statSync(join(outDir, name)).size;
         log.info(`    ${size.toString().padStart(9)}  ${name}`);

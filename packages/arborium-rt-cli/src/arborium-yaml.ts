@@ -25,6 +25,10 @@ const DISABLED_GRAMMARS = new Set<string>([
 export interface ArboriumYaml {
     grammars?: ArboriumGrammar[];
     license?: string;
+    /** Upstream source repo URL (typically `https://github.com/<owner>/<name>`). */
+    repo?: string;
+    /** Pinned upstream commit SHA. Empty string means "use the default branch". */
+    commit?: string;
 }
 
 export interface ArboriumGrammar {
@@ -62,6 +66,12 @@ export interface GrammarIndexEntry {
     readonly defPath: string;
     readonly group: string;
     readonly grammar: ArboriumGrammar;
+    /** Upstream source repo URL from the def's `arborium.yaml`. */
+    readonly repo: string | undefined;
+    /** Pinned upstream commit; empty string is normalized to undefined. */
+    readonly commit: string | undefined;
+    /** SPDX license identifier from the def's `arborium.yaml`. */
+    readonly license: string | undefined;
 }
 
 export function buildGrammarIndex(
@@ -110,9 +120,17 @@ function scanRoot(
                 continue;
             }
 
+            const commit = doc.commit && doc.commit !== '' ? doc.commit : undefined;
             for (const grammar of doc.grammars ?? []) {
                 if (grammar.id) {
-                    index.set(grammar.id, { defPath, group: group.name, grammar });
+                    index.set(grammar.id, {
+                        defPath,
+                        group: group.name,
+                        grammar,
+                        repo: doc.repo,
+                        commit,
+                        license: doc.license,
+                    });
                 }
             }
         }

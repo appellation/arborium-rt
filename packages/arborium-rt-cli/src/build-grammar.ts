@@ -13,6 +13,7 @@ import {
 import { basename, join, relative } from "node:path";
 
 import { buildGrammarIndex, type GrammarIndexEntry } from "./arborium-yaml.js";
+import { fetchLicense } from "./fetch-license.js";
 import { flattenAllIntoDir } from "./flatten.js";
 import { Logger, hasCommand, normalizeCSymbol, paths, run } from "./util.js";
 
@@ -195,6 +196,24 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
   // --- flatten queries ------------------------------------------------------
   log.step("flattening queries");
   flattenAllIntoDir(args.lang, index, outDir);
+
+  // --- fetch upstream LICENSE ----------------------------------------------
+  //
+  // The arborium submodule vendors grammar.js but not the upstream license
+  // text — fetch it directly from the source repo at the pinned commit so
+  // the file we redistribute alongside the wasm satisfies the upstream
+  // license terms (every allowed license here requires reproducing it).
+  if (!currentEntry.repo) {
+    throw new Error(
+      `${args.lang}: arborium.yaml is missing a top-level \`repo:\` field; can't fetch upstream LICENSE`,
+    );
+  }
+  await fetchLicense({
+    repo: currentEntry.repo,
+    commit: currentEntry.commit,
+    outPath: join(outDir, "LICENSE"),
+    log,
+  });
 
   log.step(`built ${relative(p.repoRoot, outDir)}`);
 }
