@@ -13,7 +13,7 @@ Two structural rewrites in lockstep with the kotlin patch:
        (call_expression (navigation_expression
            (navigation_suffix (simple_identifier) @function.call))))
    becomes a non-descending scope capture
-       (call_expression . (navigation_expression) @_callable.chain)
+       (call_expression . (navigation_expression) @callable.chain)
    that the highlight pipeline post-process uses to retag any
    @variable.member capture whose end byte coincides with the
    chain's end byte (= last navigation_suffix in the chain = the
@@ -86,7 +86,7 @@ index 82ad68d..ece75d5 100644
 -  (navigation_expression
 -    (navigation_suffix
 -      (simple_identifier) @function.call)))
-+  . (navigation_expression) @_callable.chain) ; foo.bar.baz()
++  . (navigation_expression) @callable.chain) ; foo.bar.baz()
  
  (call_expression
 -  (prefix_expression

@@ -16,7 +16,7 @@ at every nested call_expression. Rewrite to be genuinely O(n):
        (call_expression (navigation_expression
            (navigation_suffix (simple_identifier) @function))))
    becomes a non-descending scope capture
-       (call_expression . (navigation_expression) @_callable.chain)
+       (call_expression . (navigation_expression) @callable.chain)
    which captures the whole receiver-chain navigation_expression as a
    single span and lets the highlight pipeline retag any
    @property capture whose end byte coincides with this scope's end
@@ -71,7 +71,7 @@ index a0df0a2..c040faf 100644
 -	(navigation_expression
 -		(navigation_suffix
 -			(simple_identifier) @function) . ))
-+	. (navigation_expression) @_callable.chain)
++	. (navigation_expression) @callable.chain)
  
  (call_expression
  	. (simple_identifier) @function.builtin

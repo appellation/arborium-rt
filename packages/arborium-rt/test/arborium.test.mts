@@ -188,7 +188,7 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
     // Regression coverage for the kotlin chain-method DoS (CVSS 4.0 / VA:H).
     // Two things this exercises that the JSON tests don't:
     //
-    //   1. The `_callable.chain` scaffolding capture is consumed by the
+    //   1. The `callable.chain` scaffolding capture is consumed by the
     //      pipeline's `apply_call_context_upgrades` pass and never appears
     //      in user-visible output.
     //   2. The chain `obj.foo().bar()` is genuinely O(n): the highlight
@@ -233,10 +233,10 @@ describe('loadArboriumRuntime + Grammar + Session', () => {
                 const ySpan = spans.find((s) => s.start === yStart && s.end === yEnd);
                 const xSpan = spans.find((s) => s.start === xStart && s.end === xEnd);
 
-                // The pipeline strips the `_callable.chain` scaffolding
+                // The pipeline strips the `callable.chain` scaffolding
                 // capture entirely — it has no theme tag and exists only to
                 // drive the post-process upgrade.
-                expect(spans.find((s) => s.tag === '_callable.chain')).toBeUndefined();
+                expect(spans.find((s) => s.tag === 'callable.chain')).toBeUndefined();
 
                 // Call target retagged to @function; chain-internal property
                 // stays @property. Theme tags from `arborium_theme::tag_for_capture`

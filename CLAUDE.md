@@ -200,6 +200,18 @@ Patches live as mbox files under `patches/<submodule>/` (`git
 format-patch` output). All current patches are trivial target guards or
 opt-in codegen flags — no logic changes to existing behavior.
 
+**Never commit inside `third_party/<submodule>/`.** All downstream
+modifications to a submodule's tracked files belong in
+`patches/<submodule>/NNNN-<title>.patch`, applied to the working tree
+by `bootstrap` via `git apply` (no commits, no committer identity
+required). The submodule pointer in this repo must stay at the upstream
+pinned SHA — letting it move forward to a local commit makes the
+parent commit unreachable from upstream and bypasses the patch
+mechanism. To capture an iterative edit as a patch, edit the file in
+the submodule's working tree, test, then write the diff into a new
+mbox file under `patches/<submodule>/` (either by hand or via
+`git format-patch` from a temp commit that you discard afterward).
+
 `./scripts/arborium-rt bootstrap` is **idempotent**: it resets each
 submodule to its pinned SHA, `git apply`s every patch under
 `patches/<submodule>/` to the working tree (no commits — `git apply`

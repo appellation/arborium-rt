@@ -32,12 +32,18 @@ const MAX_INJECTION_DEPTH: u32 = 32;
 ///   (call_expression (navigation_expression (navigation_suffix (simple_identifier) @function)))
 /// are O(n^2) on chained calls because the QueryCursor descends the recursion.
 /// Instead the grammars capture the receiver chain as a whole node:
-///   (call_expression . (navigation_expression) @_callable.chain)
+///   (call_expression . (navigation_expression) @callable.chain)
 /// (which is O(n) — the inner pattern doesn't descend), and this pipeline
 /// retags any `@property` / `@variable.member` capture whose end byte equals
-/// a `@_callable.chain` capture's end byte (= last suffix in the chain =
+/// a `@callable.chain` capture's end byte (= last suffix in the chain =
 /// the actual call target) into `@function` / `@function.call`.
-const CALLABLE_CHAIN_CAPTURE: &str = "_callable.chain";
+///
+/// The capture name does NOT start with `_`: arborium-plugin-runtime's
+/// `parse_raw` drops underscore-prefixed captures before they reach the
+/// spans Vec, which would prevent this pass from ever seeing the
+/// scaffolding capture. `callable.chain` has no theme-tag mapping in
+/// arborium-theme, so it's stripped at dedup time after this pass uses it.
+const CALLABLE_CHAIN_CAPTURE: &str = "callable.chain";
 
 #[derive(Debug)]
 pub(crate) enum HighlightError {
