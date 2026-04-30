@@ -18,6 +18,7 @@ import { packageAll } from './package-all.js';
 import { stage } from './stage.js';
 import { Logger, paths } from './util.js';
 import { writeGrammarsIndexModule } from './write-grammars-index.js';
+import { writeThirdPartyNotices } from './write-third-party-notices.js';
 
 const USAGE = `\
 arborium-rt <subcommand> [options]
@@ -97,6 +98,7 @@ async function cmdBuildPackage(args: readonly string[]): Promise<number> {
     }
     await buildPackage({ group, lang });
     writeGrammarsIndexModule();
+    writeThirdPartyNotices();
     return 0;
 }
 

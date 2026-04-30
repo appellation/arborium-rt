@@ -211,7 +211,7 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
   await fetchLicense({
     repo: currentEntry.repo,
     commit: currentEntry.commit,
-    outPath: join(outDir, "LICENSE"),
+    outDir,
     log,
   });
 

@@ -1,23 +1,29 @@
-// Fetch an upstream LICENSE/COPYING file from a grammar's source repo and
-// cache it under `target/grammars/<lang>/LICENSE`. Distributing the parser
-// wasm without the upstream license would violate every common OSS
+// Fetch every upstream LICENSE/COPYING/NOTICE file from a grammar's source
+// repo and cache them under `target/grammars/<lang>/`. Distributing the
+// parser wasm without the upstream license would violate every common OSS
 // license we ship under (MIT, Apache-2.0, ISC, CC0-1.0), so this is a hard
-// build step — failure to locate a license aborts the build.
+// build step — failure to locate any license aborts the build.
 //
-// Cache semantics: if the destination file already exists and is non-empty,
-// no network calls are made. To re-fetch (e.g. after bumping a pinned
-// commit), delete `target/grammars/<lang>/LICENSE` first.
+// Multi-file behavior: dual-licensed repos (e.g. `MIT OR Apache-2.0`)
+// commonly ship `LICENSE-MIT` + `LICENSE-APACHE` and may also have a
+// top-level `LICENSE` wrapper. We probe every candidate filename and
+// preserve all matches with their original names so the bundle reproduces
+// the upstream attribution faithfully.
+//
+// Cache semantics: if the destination dir already contains any LICENSE-ish
+// file, no network calls are made. To re-fetch (e.g. after bumping a pinned
+// commit), delete the affected files under `target/grammars/<lang>/`.
 
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { Logger } from './util.js';
 
 /**
- * Common LICENSE/COPYING filenames found in tree-sitter grammar repos,
- * tried in order. Most upstream parsers use plain `LICENSE`; the dual-
- * licensed variants (LICENSE-MIT/LICENSE-APACHE) and `COPYING` cover
- * the long tail.
+ * Filenames probed at the upstream repo's pinned commit. Plain `LICENSE`
+ * covers the common case; the `-MIT` / `-APACHE` / `-BSD` variants pick up
+ * dual-licensed repos; `COPYING` covers the GNU/BSD long tail; `NOTICE`
+ * covers Apache-2.0 §4(d) attribution requirements.
  */
 const LICENSE_FILENAMES = [
     'LICENSE',
@@ -27,58 +33,84 @@ const LICENSE_FILENAMES = [
     'license.md',
     'license.txt',
     'LICENSE-MIT',
+    'LICENSE-MIT.md',
+    'LICENSE-MIT.txt',
     'LICENSE-APACHE',
+    'LICENSE-APACHE.md',
+    'LICENSE-APACHE.txt',
+    'LICENSE-BSD',
     'COPYING',
     'COPYING.md',
+    'COPYING.txt',
+    'NOTICE',
+    'NOTICE.md',
+    'NOTICE.txt',
 ] as const;
+
+/**
+ * Matches the filenames we recognize as upstream attribution. Used both
+ * here (cache check) and downstream (build-package, notices generator)
+ * to identify which files in `target/grammars/<lang>/` are licenses
+ * versus build artifacts (wasm, .scm).
+ */
+export const LICENSE_FILE_RE = /^(LICENSE|license|COPYING|NOTICE)/;
 
 export interface FetchLicenseArgs {
     /** Upstream repo URL, e.g. `https://github.com/tree-sitter/tree-sitter-json`. */
     repo: string;
     /** Pinned commit SHA, or `undefined` to fall back to the default branch. */
     commit: string | undefined;
-    /** Absolute path the LICENSE bytes should be written to. */
-    outPath: string;
+    /** Directory the LICENSE file(s) should be written into. */
+    outDir: string;
     /** Logger to surface progress + warnings on. */
     log: Logger;
 }
 
 /**
- * Fetch the upstream license and write it to `outPath`. Idempotent: if the
- * file already exists with non-zero size, returns immediately without
- * touching the network.
+ * Fetch every upstream license file we can find and write them to `outDir`,
+ * each preserving its original filename. Idempotent: if `outDir` already
+ * contains any LICENSE-ish file, returns immediately without touching the
+ * network.
  */
 export async function fetchLicense(args: FetchLicenseArgs): Promise<void> {
-    if (existsSync(args.outPath) && statSync(args.outPath).size > 0) {
-        args.log.info(`license already cached at ${args.outPath}`);
+    if (existsSync(args.outDir) && readdirSync(args.outDir).some((n) => LICENSE_FILE_RE.test(n))) {
+        args.log.info(`license already cached at ${args.outDir}`);
         return;
     }
 
     const { owner, name } = parseGithubRepo(args.repo);
     const ref = args.commit ?? 'HEAD';
 
-    const tried: string[] = [];
-    for (const fname of LICENSE_FILENAMES) {
-        const url = `https://raw.githubusercontent.com/${owner}/${name}/${ref}/${fname}`;
-        tried.push(fname);
-        const res = await fetch(url);
-        if (res.status === 404) continue;
-        if (!res.ok) {
-            throw new Error(
-                `fetching ${url} failed: HTTP ${res.status} ${res.statusText}`,
-            );
-        }
-        const text = await res.text();
-        mkdirSync(dirname(args.outPath), { recursive: true });
-        writeFileSync(args.outPath, text);
-        args.log.step(
-            `fetched LICENSE from ${owner}/${name}@${ref.slice(0, 12)}/${fname}`,
+    // Probe in parallel — most filenames 404, and the per-grammar latency
+    // would otherwise be 19× round-trip time. Keep all 200 responses.
+    const probes = await Promise.all(
+        LICENSE_FILENAMES.map(async (fname) => {
+            const url = `https://raw.githubusercontent.com/${owner}/${name}/${ref}/${fname}`;
+            const res = await fetch(url);
+            if (res.status === 404) return null;
+            if (!res.ok) {
+                throw new Error(
+                    `fetching ${url} failed: HTTP ${res.status} ${res.statusText}`,
+                );
+            }
+            return { fname, text: await res.text() };
+        }),
+    );
+
+    const found = probes.filter((p): p is { fname: string; text: string } => p !== null);
+
+    if (found.length === 0) {
+        throw new Error(
+            `no license file found in ${owner}/${name}@${ref}; tried ${LICENSE_FILENAMES.join(', ')}`,
         );
-        return;
     }
 
-    throw new Error(
-        `no license file found in ${owner}/${name}@${ref}; tried ${tried.join(', ')}`,
+    mkdirSync(args.outDir, { recursive: true });
+    for (const { fname, text } of found) {
+        writeFileSync(join(args.outDir, fname), text);
+    }
+    args.log.step(
+        `fetched ${found.length} license file(s) from ${owner}/${name}@${ref.slice(0, 12)}: ${found.map((f) => f.fname).join(', ')}`,
     );
 }
 

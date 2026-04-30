@@ -13,6 +13,7 @@ import {
     existsSync,
     mkdirSync,
     readFileSync,
+    readdirSync,
     rmSync,
     statSync,
     writeFileSync,
@@ -20,6 +21,7 @@ import {
 import { join, relative } from 'node:path';
 
 import type { GrammarIndexEntry } from './arborium-yaml.js';
+import { LICENSE_FILE_RE } from './fetch-license.js';
 import { QUERY_TYPES, type QueryType } from './flatten.js';
 import { Logger, paths } from './util.js';
 
@@ -46,10 +48,10 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
         );
     }
 
-    const licenseSrc = join(grammarDir, 'LICENSE');
-    if (!existsSync(licenseSrc)) {
+    const licenseFiles = readdirSync(grammarDir).filter((n) => LICENSE_FILE_RE.test(n)).sort();
+    if (licenseFiles.length === 0) {
         throw new Error(
-            `${licenseSrc} not found. run \`arborium-rt build-grammar ${args.group} ${args.lang}\` first to fetch the upstream LICENSE.`,
+            `no LICENSE files in ${grammarDir}. run \`arborium-rt build-grammar ${args.group} ${args.lang}\` first to fetch the upstream attribution.`,
         );
     }
 
@@ -65,7 +67,9 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
     mkdirSync(outDir, { recursive: true });
 
     copyFileSync(wasmSrc, join(outDir, wasmName));
-    copyFileSync(licenseSrc, join(outDir, 'LICENSE'));
+    for (const fname of licenseFiles) {
+        copyFileSync(join(grammarDir, fname), join(outDir, fname));
+    }
     for (const [qtype, content] of Object.entries(queries)) {
         writeFileSync(join(outDir, `${qtype}.scm`), content);
     }
@@ -73,7 +77,7 @@ export async function buildPackage(args: BuildPackageArgs): Promise<void> {
     log.step(`wrote grammars/${args.lang} to ${relative(p.repoRoot, outDir)}`);
     const files = [
         wasmName,
-        'LICENSE',
+        ...licenseFiles,
         ...QUERY_TYPES.filter((q) => queries[q] !== undefined).map((q) => `${q}.scm`),
     ];
     for (const name of files) {
