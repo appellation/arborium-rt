@@ -172,6 +172,17 @@ jobs:
           crate: askalono-cli
           version: "0.5.0"
 
+      # `prep` already built the patched tree-sitter CLI — but its patched
+      # *submodule working tree* doesn't propagate across jobs (each runner
+      # gets a fresh `submodules: recursive` checkout). `apply-patches` is
+      # the lighter half of `bootstrap` that only does the working-tree
+      # setup (reset + git apply + render Cargo.toml). Without this,
+      # patches like `0002-inject-markdown-inline.patch` are never applied
+      # here, so the markdown grammar's flattened injections.scm ships
+      # without the `(inline) → markdown_inline` rule.
+      - name: Apply submodule patches
+        run: ./scripts/arborium-rt apply-patches
+
       - name: Build grammars in ${{ matrix.group }}
         run: ./scripts/arborium-rt build-all --group ${{ matrix.group }}
 

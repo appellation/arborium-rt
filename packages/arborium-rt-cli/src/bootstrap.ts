@@ -16,9 +16,17 @@ import { Logger, hostTriple, paths, run } from './util.js';
 /** Local version string rendered into each `Cargo.toml` from its template. */
 const RENDER_VERSION = '0.0.0-arborium-rt';
 
-export async function bootstrap(): Promise<void> {
+/**
+ * Working-tree-only setup: reset each submodule to its pinned commit, apply
+ * local patches, render `Cargo.toml` from templates, and write the stub
+ * `builtin_generated.rs`. Does not build the tree-sitter CLI — see
+ * {@link bootstrap} for the full setup. CI's per-group grammars job uses
+ * this directly so it can reuse the CLI artifact built once in `prep`,
+ * instead of rebuilding it on every matrix shard.
+ */
+export async function applyPatches(): Promise<void> {
     const p = paths();
-    const log = new Logger('bootstrap');
+    const log = new Logger('apply-patches');
 
     if (!existsSync(join(p.submoduleRoot, '.git'))) {
         throw new Error(
@@ -38,7 +46,7 @@ export async function bootstrap(): Promise<void> {
         'submodule', 'update', '--init', '--force', 'third_party/arborium',
     ]);
     await run(log, 'git', ['-C', p.submoduleRoot, 'clean', '-fd']);
-    await applyPatches(log, p.submoduleRoot, p.arboriumPatchesDir);
+    await applyPatchDir(log, p.submoduleRoot, p.arboriumPatchesDir);
 
     log.step(`rendering Cargo.toml from Cargo.stpl.toml (version ${RENDER_VERSION})`);
     const cratesDir = join(p.submoduleRoot, 'crates');
@@ -53,7 +61,7 @@ export async function bootstrap(): Promise<void> {
     log.step('writing arborium-theme/src/builtin_generated.rs stub');
     writeArboriumThemeBuiltin(cratesDir);
 
-    // --- tree-sitter submodule + CLI build ------------------------------------
+    // --- tree-sitter submodule -------------------------------------------------
     log.step('resetting tree-sitter submodule to its pinned commit');
     await run(log, 'git', [
         '-C', p.repoRoot,
@@ -63,7 +71,16 @@ export async function bootstrap(): Promise<void> {
     // state we want to keep across bootstraps. Patches only touch tracked
     // files, so `clean -fd` is enough to undo a prior patch.
     await run(log, 'git', ['-C', p.treeSitterRoot, 'clean', '-fd']);
-    await applyPatches(log, p.treeSitterRoot, p.treeSitterPatchesDir);
+    await applyPatchDir(log, p.treeSitterRoot, p.treeSitterPatchesDir);
+
+    log.step('apply-patches complete.');
+}
+
+export async function bootstrap(): Promise<void> {
+    const p = paths();
+    const log = new Logger('bootstrap');
+
+    await applyPatches();
 
     log.step(`building patched tree-sitter CLI -> ${p.treeSitterBin}`);
     // The repo root's `.cargo/config.toml` pins target=wasm32-unknown-emscripten
@@ -91,7 +108,7 @@ export async function bootstrap(): Promise<void> {
  * `git apply` tolerates the preamble and reads the unified diff body, so no
  * committer identity is needed and nothing gets committed in the submodule.
  */
-async function applyPatches(
+async function applyPatchDir(
     log: Logger,
     submoduleRoot: string,
     patchesDir: string,

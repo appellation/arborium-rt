@@ -7,7 +7,7 @@ import { parseArgs } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { bootstrap } from './bootstrap.js';
+import { applyPatches, bootstrap } from './bootstrap.js';
 import { buildAll } from './build-all.js';
 import { buildGrammar } from './build-grammar.js';
 import { buildHost } from './build-host.js';
@@ -24,7 +24,8 @@ const USAGE = `\
 arborium-rt <subcommand> [options]
 
 Subcommands:
-  bootstrap                          apply local patches + render submodule Cargo.toml
+  bootstrap                          apply-patches + build the patched tree-sitter CLI
+  apply-patches                      reset submodules + apply patches + render Cargo.toml (no CLI build)
   build-host                         build web-tree-sitter.{wasm,mjs} (MAIN_MODULE)
   build-grammar <group> <lang>       build tree-sitter-<lang>.wasm + flatten queries
   package <group> <lang>             generate dist/grammars/<lang>/ inside the runtime package
@@ -56,6 +57,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const [cmd, ...rest] = argv;
     switch (cmd) {
         case 'bootstrap': await bootstrap(); return 0;
+        case 'apply-patches': await applyPatches(); return 0;
         case 'build-host': await buildHost(); return 0;
         case 'build-grammar': return cmdBuildGrammar(rest);
         case 'package': return cmdBuildPackage(rest);
