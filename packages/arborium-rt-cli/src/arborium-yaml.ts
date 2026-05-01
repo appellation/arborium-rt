@@ -29,6 +29,24 @@ export const DISABLED_GRAMMARS: Record<string, string> = {
     vb: 'upstream repo ships no LICENSE file; cannot attribute',
 }
 
+/**
+ * Per-grammar commit overrides for upstreams whose manifest-pinned SHA is
+ * no longer reachable (force-push, repo cleanup). The manifest itself
+ * lives in the arborium submodule and isn't editable from here, so this
+ * pins downstream tooling (notices generator, license fetcher) to a
+ * current default-branch HEAD. Refresh when upstream rotates again.
+ */
+export const COMMIT_OVERRIDES: Record<string, string> = {
+    rust: 'a2d578348a195fe9fc97bd14a9fc84f314a0c2fe',
+    styx: '0655eb2b0f9e1ddbd0e27a0b9063f1317c990f70',
+    vim: '3092fcd99eb87bbd0fc434aa03650ba58bd5b43b',
+}
+
+/** Effective commit for a grammar, after applying COMMIT_OVERRIDES. */
+export function resolveCommit(id: string, entry: GrammarIndexEntry): string | undefined {
+    return COMMIT_OVERRIDES[id] ?? entry.commit;
+}
+
 
 export interface ArboriumYaml {
     grammars?: ArboriumGrammar[];

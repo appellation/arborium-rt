@@ -118,8 +118,8 @@ jobs:
 
   # Per-arborium-group fan-out. Each job builds every grammar in its
   # group and uploads target/grammars/<lang>/ for the package job to
-  # merge. No Rust toolchain here — `build-grammar` only needs emcc
-  # plus the patched tree-sitter CLI from `prep`.
+  # merge. Needs emcc, the patched tree-sitter CLI (from `prep`), and
+  # askalono (for fetch-license's upstream-clone-and-identify step).
   grammars:
     needs: prep
     runs-on: ubuntu-latest
@@ -162,6 +162,15 @@ jobs:
 
       - name: Make tree-sitter executable
         run: chmod +x ${{ env.TREE_SITTER_BIN_DIR }}/tree-sitter
+
+      # Required by `build-grammar` for the upstream LICENSE/NOTICE
+      # fetch step — fetch-license shells out to `askalono crawl` to
+      # identify license files in each grammar's shallow clone.
+      - name: Install askalono CLI
+        uses: baptiste0928/cargo-install@v3
+        with:
+          crate: askalono-cli
+          version: "0.5.0"
 
       - name: Build grammars in ${{ matrix.group }}
         run: ./scripts/arborium-rt build-all --group ${{ matrix.group }}

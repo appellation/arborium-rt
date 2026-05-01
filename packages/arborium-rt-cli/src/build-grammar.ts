@@ -200,17 +200,12 @@ export async function buildGrammar(args: BuildGrammarArgs): Promise<void> {
   // --- fetch upstream LICENSE ----------------------------------------------
   //
   // The arborium submodule vendors grammar.js but not the upstream license
-  // text — fetch it directly from the source repo at the pinned commit so
-  // the file we redistribute alongside the wasm satisfies the upstream
-  // license terms (every allowed license here requires reproducing it).
-  if (!currentEntry.repo) {
-    throw new Error(
-      `${args.lang}: arborium.yaml is missing a top-level \`repo:\` field; can't fetch upstream LICENSE`,
-    );
-  }
+  // text — shallow-clone the source repo at its pinned commit and copy
+  // the depth-1 LICENSE/NOTICE files alongside the wasm. Locally-vendored
+  // grammars (`repo: local`) get arborium's own LICENSE-MIT + LICENSE-APACHE.
   await fetchLicense({
-    repo: currentEntry.repo,
-    commit: currentEntry.commit,
+    id: args.lang,
+    entry: currentEntry,
     outDir,
     log,
   });
