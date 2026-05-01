@@ -68,6 +68,34 @@ interface AskalonoFileResult {
 }
 
 /**
+ * Post-detect SPDX upgrades. askalono returns a single best-match license
+ * body and doesn't model SPDX exceptions (`License WITH Exception` is a
+ * compound expression, not a single template). For files where the body
+ * matches a known license but a recognized exception preamble is appended,
+ * upgrade the SPDX id to the compound form.
+ */
+const SPDX_UPGRADES: ReadonlyArray<{
+  base: string;
+  suffix: string;
+  pattern: RegExp;
+}> = [
+  {
+    base: "Apache-2.0",
+    suffix: "WITH LLVM-exception",
+    pattern: /LLVM Exceptions to the Apache 2\.0 License/i,
+  },
+];
+
+function upgradeSpdx(spdx: string, text: string): string {
+  for (const u of SPDX_UPGRADES) {
+    if (spdx === u.base && u.pattern.test(text)) {
+      return `${u.base} ${u.suffix}`;
+    }
+  }
+  return spdx;
+}
+
+/**
  * Ensure `cloneDir` contains a checkout of `repo` at `commit`. Idempotent:
  * if the directory already has the right commit checked out, returns
  * without touching the network.
@@ -187,11 +215,12 @@ export async function detectLicenses(
 
     if (obj.error || !obj.result?.license) continue;
 
+    const text = readFileSync(obj.path, "utf8");
     out.push({
       file: rel,
-      spdx: obj.result.license.name,
+      spdx: upgradeSpdx(obj.result.license.name, text),
       score: obj.result.score,
-      text: readFileSync(obj.path, "utf8"),
+      text,
     });
   }
   return out.sort((a, b) => a.file.localeCompare(b.file));

@@ -64,9 +64,6 @@ const LICENSE_OVERRIDES: Record<string, string> = {
   jq: "BSD-3-Clause",
   // Manifest claims MIT; upstream LICENSE is the verbatim BSD-2-Clause text.
   postscript: "BSD-2-Clause",
-  // Manifest claims `Apache-2.0 WITH LLVM-exception`; upstream LICENSE is
-  // plain Apache-2.0 with no LLVM-exception clause.
-  wit: "Apache-2.0",
 };
 
 interface NoticeEntry {

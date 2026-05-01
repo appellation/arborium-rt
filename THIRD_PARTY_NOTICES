@@ -5125,7 +5125,7 @@ SOFTWARE.
 Source:  https://github.com/bytecodealliance/tree-sitter-wit
 Commit:  a80c1f47baa5bfb13e2b5f49aa5304e3dab94948
 
-License: Apache-2.0  (askalono confidence: 0.957)
+License: Apache-2.0 WITH LLVM-exception  (askalono confidence: 0.957)
 File:    LICENSE
 --------------------------------------------------------------------------------
 
