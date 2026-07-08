@@ -48,6 +48,12 @@ const EXTRA_TS_EXPORTS = [
  */
 const EXTRA_LIBC_EXPORTS = [
 	"_abort",
+	// wctype classification used by grammar external scanners. Upstream's
+	// stdlib-symbols.txt exports the isw* family (iswalnum/iswalpha/…) but is
+	// missing iswpunct — the vim scanner's SEP_FIRST branch calls it, so
+	// without this export the SIDE_MODULE's `iswpunct` import resolves to
+	// undefined and traps when the parser first reaches that scanner state.
+	"_iswpunct",
 	// Used by std::time::Instant in arborium-plugin-runtime's wall-clock
 	// budget (deadline check inside the QueryCursor progress callback).
 	"_clock_gettime",
