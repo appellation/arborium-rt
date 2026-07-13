@@ -11,7 +11,7 @@
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { availableParallelism, totalmem } from "node:os";
 import { join } from "node:path";
-import { type ListrTask } from "listr2";
+import type { ListrTask } from "listr2";
 import {
 	buildGrammarIndex,
 	type GrammarIndexEntry,

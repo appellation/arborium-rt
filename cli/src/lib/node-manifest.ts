@@ -109,13 +109,18 @@ export async function rebuildManifestFromStaged(
 	for (const d of dirents) {
 		if (!d.isDirectory()) continue;
 		const id = d.name;
-		if (!(await isFile(join(p.nodeGrammarsOut, id, "src", "parser.c")))) continue;
+		if (!(await isFile(join(p.nodeGrammarsOut, id, "src", "parser.c"))))
+			continue;
 		const entry = index.get(id);
 		if (!entry) {
 			throw new Error(`staged grammar \`${id}\` is not in the corpus index`);
 		}
 		built.push(
-			await manifestEntryFor(p, id, normalizeCSymbol(entry.grammar.c_symbol, id)),
+			await manifestEntryFor(
+				p,
+				id,
+				normalizeCSymbol(entry.grammar.c_symbol, id),
+			),
 		);
 	}
 

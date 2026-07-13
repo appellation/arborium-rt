@@ -48,13 +48,12 @@ const CASES: ReadonlyArray<readonly [string, number]> = [
 ];
 
 describe("flattenQuery", () => {
-	it.each(CASES)(
-		"flattens %s highlights to %i lines",
-		async (lang, expected) => {
-			const got = lineCount(await flattenQuery(lang, "highlights", index));
-			expect(got).toBe(expected);
-		},
-	);
+	it.each(
+		CASES,
+	)("flattens %s highlights to %i lines", async (lang, expected) => {
+		const got = lineCount(await flattenQuery(lang, "highlights", index));
+		expect(got).toBe(expected);
+	});
 
 	it("pass-through grammars (no prepend) return their own highlights unchanged", async () => {
 		const jsonEntry = index.get("json");

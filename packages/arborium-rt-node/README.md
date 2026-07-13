@@ -4,9 +4,6 @@ TypeScript package that statically links tree-sitter, arborium, and **every**
 per-grammar parser/scanner into one native Node.js addon — no wasm host, no
 dynamic grammar loading, no assets to trace.
 
-See the repo root for the architectural story. This README covers consumer
-usage.
-
 ## Install
 
 Grab the platform-appropriate `.node` binary and the package from the latest
@@ -15,7 +12,7 @@ platform automatically. Prebuilt binaries ship for:
 
 - darwin `x64`, `arm64`
 - linux gnu `x64`, `arm64`
-- win32 `x64` (msvc)
+- win32 `x64`, `arm64` (msvc)
 
 Each is published as a `@discord/arborium-rt-node-<platform>` optional
 dependency, gated by `os`/`cpu`/`libc` so only the matching one installs.
@@ -86,4 +83,4 @@ All offsets are UTF-16 code-unit indices, compatible with
 
 ## License
 
-MIT.
+MIT

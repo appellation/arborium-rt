@@ -3,8 +3,8 @@
 TypeScript package that dynamically links tree-sitter, arborium, and per-grammar
 parser tables in the browser so each pays for itself exactly once.
 
-See the repo root for the architectural story. This README covers consumer
-usage.
+See the repo root for the project overview; this README covers consumer
+usage and the [architecture](#architecture) behind it.
 
 ## Install
 
@@ -56,12 +56,83 @@ The bundled `GRAMMARS` entries use URLs for all of those fields, so listing
 every grammar costs only a few bytes of eager metadata; the bytes don't
 load until you call `loadGrammar`.
 
+## Grammars
+
+Every supported grammar is bundled into the `@discord/arborium-rt-wasm`
+tarball and exposed as a single eager map — `GRAMMARS` — keyed by language
+id (its `BundledGrammarId` union). Each entry carries lightweight metadata
+(`languageId`, `languageExport`) plus URL references to the per-grammar
+`.wasm` and `.scm` assets; the bytes are only fetched when `loadGrammar`
+runs.
+
+```ts
+import { GRAMMARS, loadArboriumRuntime } from "@discord/arborium-rt-wasm";
+
+const runtime = await loadArboriumRuntime();
+const grammar = await runtime.loadGrammar(GRAMMARS.typescript);
+```
+
+Layout inside the package:
+
+```
+@discord/arborium-rt-wasm/
+├── dist/
+│   ├── host/web-tree-sitter.{wasm,mjs}
+│   ├── runtime/arborium_emscripten_runtime.wasm
+│   ├── grammars.js           # exports GRAMMARS — URLs point at the sibling subdirs
+│   └── grammars/
+│       ├── json/
+│       │   ├── tree-sitter-json.wasm
+│       │   └── highlights.scm       # flattened — prepend chain + own
+│       └── …one per grammar
+└── package.json
+```
+
+`runtime.loadGrammar` accepts `wasm` as a `URL`, `ArrayBuffer`, or
+`Uint8Array`, and accepts the query fields (`highlights`, `injections`,
+`locals`) as either a raw string or a `URL` — URLs are fetched under
+browsers and read from disk under Node.
+
 ## Bundle size
 
 Because `GRAMMARS` names every language statically, a naïve rspack/webpack
 build will emit every grammar's `.wasm` + `.scm` (around 160 MB total).
 Bundlers that tree-shake based on referenced entries will only pull in
 the grammars you actually load; otherwise expect the full asset set.
+
+## Architecture
+
+```
+┌─────────────────────────────────┐
+│ web-tree-sitter.wasm            │   MAIN_MODULE=2, upstream tree-sitter.
+│                                 │   Ships the C runtime once (~200 KB).
+└──────────────▲──────────────────┘
+               │ loadWebAssemblyModule
+       ┌───────┴────────┐
+       │                │
+┌──────┴──────────┐  ┌──┴──────────────────────────────┐
+│ tree-sitter-    │  │ arborium_emscripten_runtime.wasm │
+│ <grammar>.wasm  │  │  (this package)                  │
+│ one per grammar │  │  one shared copy                 │
+└─────────────────┘  └──────────────────────────────────┘
+   parser tables       session + query execution in Rust
+```
+
+One running instance of the runtime serves many grammars via a
+registry keyed by grammar ID. Each grammar is registered by handing
+over its `*const TSLanguage` (from its side module's
+`tree_sitter_<lang>()` export), a language name (used to resolve
+`@injection.language` captures against other registered grammars),
+plus the three query strings (`highlights.scm`, `injections.scm`,
+`locals.scm`).
+
+The primary output is a full highlight pipeline
+(`arborium_rt_highlight_to_html` / `arborium_rt_highlight_to_spans_utf16`)
+that handles recursive injection resolution, dedup, theming, and
+optional HTML rendering end-to-end in WASM. A lower-level escape hatch
+(`arborium_rt_parse_utf16`) returns raw spans + injection points for
+consumers that want to render on their own. Both deliver their payloads
+through shared linear memory.
 
 ## API shape
 
@@ -101,6 +172,93 @@ const grammar = await runtime.loadGrammar({
 });
 ```
 
+## Raw ABI
+
+If you need to skip the TS wrapper — e.g. to embed the runtime in a
+non-JS host, or to experiment against `lib/wasm/src/lib.rs` directly — the
+surface is a set of `arborium_rt_*` `extern "C"` functions exchanging
+bytes through shared linear memory. A minimal JS driver:
+
+```js
+import MainModuleFactory from "./web-tree-sitter.mjs";
+const Module = await MainModuleFactory();
+
+const runtime = await Module.loadWebAssemblyModule(
+  await fetch("arborium_emscripten_runtime.wasm").then((r) => r.arrayBuffer()),
+  { loadAsync: true },
+);
+
+const json = await Module.loadWebAssemblyModule(
+  await fetch("tree-sitter-json.wasm").then((r) => r.arrayBuffer()),
+  { loadAsync: true },
+);
+const langPtr = json.tree_sitter_json();
+
+function putStr(s) {
+  const bytes = new TextEncoder().encode(s);
+  const p = Module._malloc(bytes.length);
+  Module.HEAPU8.set(bytes, p);
+  return [p, bytes.length];
+}
+const [nPtr, nLen] = putStr("json"); // language name, used for injection lookups
+const [hPtr, hLen] = putStr(HIGHLIGHTS_SCM);
+const [iPtr, iLen] = putStr("");
+const [lPtr, lLen] = putStr("");
+const grammarId = runtime.arborium_rt_register_grammar(
+  langPtr,
+  nPtr,
+  nLen,
+  hPtr,
+  hLen,
+  iPtr,
+  iLen,
+  lPtr,
+  lLen,
+);
+
+const sessionId = runtime.arborium_rt_create_session(grammarId);
+const [tPtr, tLen] = putStr("[1, 2, 3]");
+runtime.arborium_rt_set_text(sessionId, tPtr, tLen);
+Module._free(tPtr);
+
+// Render to HTML via the full highlight pipeline. `format=0` = CustomElements
+// (`<a-k>…</a-k>`), `maxDepth=3` matches the TS wrapper's default.
+const outPtr = Module._malloc(4);
+const outLen = Module._malloc(4);
+if (
+  runtime.arborium_rt_highlight_to_html(
+    sessionId,
+    /* maxDepth */ 3,
+    /* format */ 0,
+    /* prefixPtr */ 0,
+    /* prefixLen */ 0,
+    outPtr,
+    outLen,
+  ) !== 0
+)
+  throw new Error("highlight failed");
+const html = Module.UTF8ToString(
+  Module.getValue(outPtr, "i32"),
+  Module.getValue(outLen, "i32"),
+);
+runtime.arborium_rt_free(
+  Module.getValue(outPtr, "i32"),
+  Module.getValue(outLen, "i32"),
+);
+Module._free(outPtr);
+Module._free(outLen);
+```
+
+For themed spans instead of HTML, swap `arborium_rt_highlight_to_html`
+for `arborium_rt_highlight_to_spans_utf16` (same output-buffer protocol,
+minus the format + prefix args) and `JSON.parse` the payload into
+`{ spans: [{ start, end, tag }, ...] }`. For raw captures + injection
+points with no theming, use `arborium_rt_parse_utf16`.
+
+The full C ABI is documented inline in
+[`lib/wasm/src/lib.rs`](../../lib/wasm/src/lib.rs) — pointer ownership rules,
+return codes, and per-function contracts.
+
 ## License
 
-MIT.
+MIT
