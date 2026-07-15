@@ -89,6 +89,10 @@ function napiBuildTask(
 				p.nodeGrammarsOut,
 				"manifest.json",
 			);
+
+			process.env.CARGO_PROFILE_RELEASE_DEBUG = "2";
+      process.env.CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO = "packed";
+
 			task.output = `napi build --platform${target ? ` --target ${target}` : ""}`;
 			const { task: build } = await new NapiCli().build({
 				cwd: p.nodePackageDir,

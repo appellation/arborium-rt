@@ -70,6 +70,19 @@ jobs:
           find node-addons-raw -name '*.node' -exec mv {} node-addons/ \;
           ls -l node-addons
 
+      # Debug info for each platform's addon (build.yml's package-node matrix):
+      # a `.pdb` per Windows-msvc platform, a zipped `.dSYM` per macOS platform,
+      # a `.dwp` per Linux platform. Filenames already carry the platform, so
+      # merge-multiple is safe here (unlike the raw .node artifacts above, whose
+      # names collide across platforms until flattened).
+      - name: Download Node addon debug info
+        if: ${{ inputs.package == 'node' }}
+        uses: actions/download-artifact@v8
+        with:
+          pattern: node-debuginfo-*
+          path: node-debuginfo
+          merge-multiple: true
+
       # Independent versioning: the tag is qualified with the package name so the
       # wasm (arborium-rt-wasm@X.Y.Z) and node (arborium-rt-node@A.B.C) lineages
       # never collide, even when the two version numbers coincide. The `tag` input
@@ -117,11 +130,14 @@ jobs:
           tag="${{ steps.meta.outputs.tag }}"
           notes="Release ${tag}"
           if [ "${{ inputs.package }}" = "node" ]; then
-            assets=(node-addons/*.node)
+            assets=(node-addons/*.node node-debuginfo/*)
             notes="${notes}
 
           > Node native addons attached. This package is distributed via the attached
-          > \`.node\` binaries; npm publish is not automated for it."
+          > \`.node\` binaries; npm publish is not automated for it.
+          >
+          > Per-platform debug info is attached alongside: \`.pdb\` (Windows),
+          > \`.dSYM.zip\` (macOS), \`.dwp\` (Linux)."
           else
             assets=("${{ needs.build.outputs.tarball-name }}")
             if [ "${{ steps.publish.outcome }}" = "failure" ]; then
