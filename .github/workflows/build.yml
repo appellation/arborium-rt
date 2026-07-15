@@ -446,21 +446,21 @@ jobs:
 
       # `build node` sets CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed (see
       # build/node/index.ts), which lands one debug-info artifact next to the
-      # cdylib in target/<triple>/release/ — napi's `copyArtifact()` only ever
-      # copies the .dylib/.so/.dll it renames to `.node`, so the debug artifact
-      # has to be found and staged separately. The on-disk shape differs per
-      # platform (a single `.pdb` on Windows-msvc, a `.dSYM` *directory* bundle
-      # on macOS, a single `.dwp` on Linux), so each platform gets its own
-      # gated step below rather than one step branching on a case statement.
-      # All three glob for whichever file exists rather than hardcoding the
-      # target triple's `target/<triple>/release/` path, since native builds
-      # resolve that triple internally in napi and never pass it back to this
-      # workflow. The name filter (`arborium_rt_node`) matters: at the same
-      # maxdepth, target/release/deps/ (host-profile build deps/proc-macros,
-      # e.g. serde_derive's own dylib) can also hold same-depth debug-info
-      # files, and find's traversal order isn't guaranteed to prefer our
-      # crate's, so an unfiltered `-print -quit` could silently grab the wrong
-      # one.
+      # cdylib in target/<triple>/release/ on Windows (`.pdb`) and Linux
+      # (`.dwp`) — napi's `copyArtifact()` only ever copies the .dylib/.so/.dll
+      # it renames to `.node`, so the debug artifact has to be found and
+      # staged separately. macOS is the odd one out (see the dSYM step below)
+      # and generates its own bundle rather than looking for cargo's output.
+      # Each platform gets its own gated step rather than one step branching
+      # on a case statement. The pdb/dwp glob for whichever file exists rather
+      # than hardcoding the target triple's `target/<triple>/release/` path,
+      # since native builds resolve that triple internally in napi and never
+      # pass it back to this workflow. The name filter (`arborium_rt_node`)
+      # matters: at the same maxdepth, target/release/deps/ (host-profile
+      # build deps/proc-macros, e.g. serde_derive's own dylib) can also hold
+      # same-depth debug-info files, and find's traversal order isn't
+      # guaranteed to prefer our crate's, so an unfiltered `-print -quit`
+      # could silently grab the wrong one.
       - name: Stage debug info (pdb)
         if: ${{ startsWith(matrix.platform, 'win32-') }}
         run: |
@@ -470,15 +470,26 @@ jobs:
           cp "$f" "node-debuginfo/arborium-rt-node.${{ matrix.platform }}.pdb"
           ls -l node-debuginfo
 
-      # `zip` packs the macOS bundle into one file since `gh release
-      # create`/upload-artifact need a single path.
+      # Unlike pdb/dwp, cargo's own `-Csplit-debuginfo=packed` pack step
+      # doesn't reliably write the `.dSYM` on macOS GitHub runners: the linked
+      # `.node` ends up with debuginfo compiled (per `[optimized + debuginfo]`
+      # in the build log) but no `__DWARF` segment and no `.dSYM` anywhere
+      # under target/ — yet it still carries a debug map (OSO entries)
+      # pointing at the `.o` files this same job just built under
+      # target/<triple>/release/{deps,build}/. So instead of looking for
+      # cargo's output, run `dsymutil` ourselves against the linked addon
+      # while those `.o` files still exist on disk (nothing removes them
+      # between steps in this job) — `zip` then packs the resulting bundle
+      # into one file since `gh release create`/upload-artifact need a
+      # single path.
       - name: Stage debug info (dSYM)
         if: ${{ startsWith(matrix.platform, 'darwin-') }}
         run: |
           mkdir -p node-debuginfo
-          d=$(find target -maxdepth 3 -type d -name '*arborium_rt_node*.dSYM' -print -quit)
-          if [ -z "$d" ]; then echo "no arborium_rt_node .dSYM found under target/" >&2; exit 1; fi
-          (cd "$(dirname "$d")" && zip -qr "$GITHUB_WORKSPACE/node-debuginfo/arborium-rt-node.${{ matrix.platform }}.dSYM.zip" "$(basename "$d")")
+          node_file=$(find packages/arborium-rt-node/npm -maxdepth 2 -name 'arborium-rt-node.*.node' -print -quit)
+          if [ -z "$node_file" ]; then echo "no built .node found to run dsymutil against" >&2; exit 1; fi
+          dsymutil "$node_file" -o "node-debuginfo/arborium-rt-node.${{ matrix.platform }}.dSYM"
+          (cd node-debuginfo && zip -qr "arborium-rt-node.${{ matrix.platform }}.dSYM.zip" "arborium-rt-node.${{ matrix.platform }}.dSYM" && rm -rf "arborium-rt-node.${{ matrix.platform }}.dSYM")
           ls -l node-debuginfo
 
       - name: Stage debug info (dwp)
