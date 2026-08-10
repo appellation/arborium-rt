@@ -218,8 +218,9 @@ fn process_injections(
         if !source.is_char_boundary(start) || !source.is_char_boundary(end) {
             continue;
         }
-        let Some(inj_gid) = reg.grammar_id_by_name(&inj.language) else {
-            // Grammar not loaded — record the name and skip this injection.
+        let Some(inj_gid) = reg.resolve_language(&inj.language) else {
+            // Grammar not loaded (and not lazily loadable) — record the name
+            // and skip this injection.
             missing_injections.insert(inj.language.clone());
             continue;
         };

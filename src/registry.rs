@@ -19,12 +19,19 @@ use std::sync::{Mutex, OnceLock};
 use arborium_plugin_runtime::{HighlightConfig, PluginRuntime};
 use arborium_tree_sitter::{Language, LanguageFn};
 
+/// Fallback consulted by [`Registry::resolve_language`] for names with no
+/// registered grammar: register it (e.g. from a statically-linked grammar
+/// table) and return the new grammar id, or `None` if the name is unknown.
+/// A plain `fn` pointer so the global `Mutex<Registry>` stays `Send + Sync`.
+pub type LanguageLoader = fn(&mut Registry, &str) -> Option<u32>;
+
 pub struct Registry {
     grammars: HashMap<u32, GrammarEntry>,
     grammars_by_name: HashMap<String, u32>,
     next_grammar_id: u32,
     sessions: HashMap<u32, SessionEntry>,
     next_session_id: u32,
+    lazy_loader: Option<LanguageLoader>,
 }
 
 pub struct GrammarEntry {
@@ -49,7 +56,27 @@ impl Registry {
             next_grammar_id: 1,
             sessions: HashMap::new(),
             next_session_id: 1,
+            lazy_loader: None,
         }
+    }
+
+    /// Install the loader consulted by [`Self::resolve_language`] for names
+    /// with no registered grammar. Embedders whose grammars are all statically
+    /// available (the Node addon) use this to defer per-grammar query
+    /// compilation to first use; the wasm shim installs none and keeps its
+    /// load-from-JS flow.
+    pub fn set_lazy_loader(&mut self, loader: LanguageLoader) {
+        self.lazy_loader = Some(loader);
+    }
+
+    /// Resolve a language name to a grammar id, falling back to the lazy
+    /// loader (when installed) for names not yet registered.
+    pub fn resolve_language(&mut self, name: &str) -> Option<u32> {
+        if let Some(id) = self.grammar_id_by_name(name) {
+            return Some(id);
+        }
+        let loader = self.lazy_loader?;
+        loader(self, name)
     }
 
     pub fn register_grammar(

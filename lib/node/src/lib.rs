@@ -1,19 +1,24 @@
 //! Node.js native addon: a statically-linked arborium runtime.
 //!
 //! Every grammar's `parser.c`/scanner is compiled into this addon (see
-//! `build.rs`) and its flattened queries are baked in as `&'static str`. At
-//! first use, [`grammar_ids`] registers all of them into the process-global
-//! [`arborium_rt::registry`] and the napi surface drives the same highlight
-//! pipeline the wasm shim uses — no wasm host, no dynamic grammar loading.
+//! `build.rs`) and its flattened queries are baked in as `&'static str`.
+//! Grammars register into the process-global [`arborium_rt::registry`]
+//! lazily, each on the first call that needs it — including injection
+//! resolution, via the registry's `LanguageLoader` hook — so first touch
+//! costs one grammar's query compilation instead of the whole table's
+//! (compiling every bundled grammar's queries eagerly blocks the calling
+//! thread for seconds). The napi surface drives the same highlight pipeline
+//! the wasm shim uses — no wasm host, no dynamic grammar loading.
 //!
-//! The registry is a single process-global mutex, populated exactly once and
-//! immutable afterward (no `unregister` is exposed — everything is static).
+//! The registry is a single process-global mutex; grammars are only ever
+//! added, never removed (no `unregister` is exposed — everything is static).
 //! Node's single JS thread serializes all calls; under `worker_threads` the
-//! addon (and its registry) is shared across isolates, and the one-time
-//! `OnceLock` init keeps concurrent first-touch safe.
+//! addon (and its registry) is shared across isolates, and registration is
+//! memoized by name under the registry lock, so concurrent first-touch is
+//! safe.
 
-use std::collections::HashMap;
-use std::sync::{MutexGuard, OnceLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
 use napi::Result;
 use napi_derive::napi;
@@ -42,50 +47,64 @@ include!(concat!(env!("OUT_DIR"), "/grammar_table.rs"));
 /// Default injection recursion depth, matching the TS wrapper's default.
 const DEFAULT_MAX_INJECTION_DEPTH: u32 = 3;
 
-/// Register every bundled grammar into the global registry exactly once, and
-/// return the resulting `language id -> grammar id` map. Registration happens
-/// under the registry mutex (required by the `PENDING_LANG` handoff in
-/// `register_grammar`).
-fn grammar_ids() -> &'static HashMap<String, u32> {
-    static IDS: OnceLock<HashMap<String, u32>> = OnceLock::new();
-    IDS.get_or_init(|| {
-        let mut reg = registry().lock().expect("registry poisoned");
-        let mut ids = HashMap::with_capacity(GRAMMARS.len());
-        for g in GRAMMARS {
-            // SAFETY: lang_fn is a grammar's `tree_sitter_<sym>()` export,
-            // linked into this addon; it returns a pointer to a `'static`
-            // const TSLanguage valid for the process lifetime.
-            let raw = unsafe { (g.lang_fn)() };
-            if raw.is_null() {
-                continue;
-            }
-            let language = unsafe { Language::from_raw(raw.cast()) };
-            match reg.register_grammar(g.id, language, g.highlights, g.injections, g.locals) {
-                Ok(gid) => {
-                    ids.insert(g.id.to_string(), gid);
-                }
-                Err(_) => {
-                    // A grammar whose query fails to compile is skipped rather
-                    // than aborting the whole addon; it simply won't be in the
-                    // available-languages set.
-                }
-            }
-        }
-        ids
-    })
+/// `grammar id -> definition` index over the generated `GRAMMARS` table.
+fn grammar_table() -> &'static HashMap<&'static str, &'static GrammarDef> {
+    static TABLE: OnceLock<HashMap<&'static str, &'static GrammarDef>> = OnceLock::new();
+    TABLE.get_or_init(|| GRAMMARS.iter().map(|g| (g.id, g)).collect())
 }
 
-fn grammar_id(language: &str) -> Result<u32> {
-    grammar_ids()
-        .get(language)
-        .copied()
+/// Grammars whose queries failed to compile, memoized so a bad grammar costs
+/// one compile attempt instead of one per lookup. Locked strictly after the
+/// registry mutex (see `load_grammar`).
+fn failed_grammars() -> &'static Mutex<HashSet<&'static str>> {
+    static FAILED: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    FAILED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// The registry's `LanguageLoader`: register `name`'s statically-linked
+/// grammar on first use, compiling just that grammar's queries. Runs with the
+/// registry lock already held — both from [`grammar_id`] and from the
+/// highlight pipeline when an injection references a not-yet-loaded language.
+/// A grammar whose queries fail to compile is remembered and treated as
+/// unknown rather than aborting the caller.
+fn load_grammar(reg: &mut Registry, name: &str) -> Option<u32> {
+    let g = grammar_table().get(name)?;
+    if failed_grammars().lock().ok()?.contains(g.id) {
+        return None;
+    }
+    // SAFETY: lang_fn is a grammar's `tree_sitter_<sym>()` export, linked
+    // into this addon; it returns a pointer to a `'static` const TSLanguage
+    // valid for the process lifetime.
+    let raw = unsafe { (g.lang_fn)() };
+    if raw.is_null() {
+        return None;
+    }
+    let language = unsafe { Language::from_raw(raw.cast()) };
+    match reg.register_grammar(g.id, language, g.highlights, g.injections, g.locals) {
+        Ok(gid) => Some(gid),
+        Err(_) => {
+            if let Ok(mut failed) = failed_grammars().lock() {
+                failed.insert(g.id);
+            }
+            None
+        }
+    }
+}
+
+/// Resolve a language name to its registry grammar id, registering it on
+/// first use. Call with the guard from [`lock_registry`].
+fn grammar_id(reg: &mut Registry, language: &str) -> Result<u32> {
+    reg.resolve_language(language)
         .ok_or_else(|| napi::Error::from_reason(format!("unknown language: {language}")))
 }
 
 fn lock_registry() -> Result<MutexGuard<'static, Registry>> {
-    registry()
+    static INSTALL_LOADER: Once = Once::new();
+    let mut reg = registry()
         .lock()
-        .map_err(|_| napi::Error::from_reason("registry poisoned"))
+        .map_err(|_| napi::Error::from_reason("registry poisoned"))?;
+    INSTALL_LOADER.call_once(|| reg.set_lazy_loader(load_grammar));
+    Ok(reg)
 }
 
 // --- JS-facing value types -------------------------------------------------
@@ -234,8 +253,9 @@ fn highlight_err(e: HighlightError) -> napi::Error {
 /// The ids of every grammar bundled in this addon, sorted.
 #[napi]
 pub fn available_languages() -> Vec<String> {
-    let mut v: Vec<String> = grammar_ids().keys().cloned().collect();
-    v.sort();
+    let mut v: Vec<String> = GRAMMARS.iter().map(|g| g.id.to_string()).collect();
+    v.sort_unstable();
+    v.dedup();
     v
 }
 
@@ -247,9 +267,9 @@ pub fn highlight_to_spans(
     text: String,
     max_injection_depth: Option<u32>,
 ) -> Result<HighlightSpansResult> {
-    let gid = grammar_id(&language)?;
     let depth = max_injection_depth.unwrap_or(DEFAULT_MAX_INJECTION_DEPTH);
     let mut reg = lock_registry()?;
+    let gid = grammar_id(&mut reg, &language)?;
     let session = reg
         .create_session(gid)
         .ok_or_else(|| napi::Error::from_reason("session creation failed"))?;
@@ -266,13 +286,13 @@ pub fn highlight_to_html_string(
     text: String,
     options: Option<HtmlOptions>,
 ) -> Result<HighlightHtmlResult> {
-    let gid = grammar_id(&language)?;
     let opts = options.unwrap_or(HtmlOptions {
         max_injection_depth: None,
         format: None,
         prefix: None,
     });
     let mut reg = lock_registry()?;
+    let gid = grammar_id(&mut reg, &language)?;
     let session = reg
         .create_session(gid)
         .ok_or_else(|| napi::Error::from_reason("session creation failed"))?;
@@ -298,8 +318,8 @@ impl Session {
     /// Open a session for `language` (must be a bundled grammar id).
     #[napi(constructor)]
     pub fn new(language: String) -> Result<Self> {
-        let gid = grammar_id(&language)?;
         let mut reg = lock_registry()?;
+        let gid = grammar_id(&mut reg, &language)?;
         let session_id = reg
             .create_session(gid)
             .ok_or_else(|| napi::Error::from_reason("session creation failed"))?;

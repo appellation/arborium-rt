@@ -32,8 +32,10 @@ A second publishable package targets Node.js:
   Unlike the browser package, it bundles **every** grammar's
   `parser.c`/scanner compiled directly into the `.node` binary and every
   flattened query baked in as `&'static str` — no wasm, no host module, no
-  dynamic grammar loading. At first use it registers all grammars into the
-  shared `arborium-rt` registry and exposes the same highlight pipeline
+  dynamic grammar loading. Grammars register into the shared `arborium-rt`
+  registry lazily — each on the first call that needs it, injections included —
+  so first touch compiles one grammar's queries, not the whole table's. It
+  exposes the same highlight pipeline
   (`highlightToSpans`/`highlightToHtml`/`Session`). Built by
   `./scripts/arborium-rt build node grammars` + `build node`; see "Node native
   addon target" below.
