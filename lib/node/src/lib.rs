@@ -252,8 +252,8 @@ fn highlight_err(e: HighlightError) -> napi::Error {
 
 /// The ids of every grammar bundled in this addon, sorted.
 #[napi]
-pub fn available_languages() -> Vec<String> {
-    let mut v: Vec<String> = GRAMMARS.iter().map(|g| g.id.to_string()).collect();
+pub fn available_languages() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = GRAMMARS.iter().map(|g| g.id).collect();
     v.sort_unstable();
     v.dedup();
     v
