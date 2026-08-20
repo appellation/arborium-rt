@@ -80,3 +80,11 @@ export const JAVASCRIPT_INJECTIONS_SCM = resolve(
 	repoRoot,
 	"target/grammars/javascript/injections.scm",
 );
+export const TYPESCRIPT_GRAMMAR_WASM = resolve(
+	repoRoot,
+	"target/grammars/typescript/tree-sitter-typescript.wasm",
+);
+export const TYPESCRIPT_HIGHLIGHTS_SCM = resolve(
+	repoRoot,
+	"target/grammars/typescript/highlights.scm",
+);

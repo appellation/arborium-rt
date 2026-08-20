@@ -29,11 +29,20 @@ export interface Utf16ParseResult {
 	spans: Utf16Span[];
 	injections: Utf16Injection[];
 	/**
-	 * `true` if the runtime's wall-clock query budget fired before the
-	 * QueryCursor finished. `spans` then holds whatever was collected
-	 * before the budget expired — partial output.
+	 * Query fuel this parse consumed. Fuel models the work tree-sitter's
+	 * query cursor did — operations weighted by how many candidate matches
+	 * each one had to touch — in place of wall-clock time, so the cost of a
+	 * given (query, tree) pair is the same on every machine. Charged in
+	 * blocks of 100 cursor operations, so a document too small to reach the
+	 * first block reports 0.
 	 */
-	timed_out: boolean;
+	fuel_used: number;
+	/**
+	 * `true` if the fuel allotted to this parse ran out before the
+	 * QueryCursor finished. `spans` then holds whatever was collected
+	 * before it ran dry — partial output.
+	 */
+	out_of_fuel: boolean;
 }
 
 /**
@@ -59,10 +68,19 @@ export interface ThemedHighlightResult {
 	 */
 	missing_injections: string[];
 	/**
-	 * Language names whose parse exceeded the runtime's wall-clock query
-	 * budget. Empty when no parse timed out.
+	 * Language names whose highlighting is incomplete because the call's
+	 * fuel pool ran dry — either the grammar's own query was cut off
+	 * mid-run, or it was an injected block reached after the pool was
+	 * already empty and skipped. Empty when the whole document fit in
+	 * budget.
 	 */
-	timed_out_languages: string[];
+	out_of_fuel_languages: string[];
+	/**
+	 * Query fuel this call consumed across the primary parse and every
+	 * injected sub-parse, out of the pipeline's fixed per-call pool.
+	 * Deterministic for a given document, so it works as a cost metric.
+	 */
+	fuel_used: number;
 }
 
 /** Wire shape of `arborium_rt_highlight_to_html`'s JSON payload. */
@@ -73,8 +91,10 @@ export interface HtmlHighlightResult {
 	 * The TypeScript wrapper uses this to auto-load missing grammars and retry.
 	 */
 	missing_injections: string[];
-	/** See [`ThemedHighlightResult.timed_out_languages`]. */
-	timed_out_languages: string[];
+	/** See [`ThemedHighlightResult.out_of_fuel_languages`]. */
+	out_of_fuel_languages: string[];
+	/** See [`ThemedHighlightResult.fuel_used`]. */
+	fuel_used: number;
 }
 
 /**

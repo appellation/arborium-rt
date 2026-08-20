@@ -196,10 +196,10 @@ it("highlights languages injected three levels deep", async () => {
 
 		// Depth 2 reaches all three levels (markdown → html → css/js); every
 		// referenced grammar is loaded, so nothing is reported missing.
-		const { spans, missingInjections, timedOutLanguages } =
+		const { spans, missingInjections, outOfFuelLanguages } =
 			session.highlightToSpans({ maxInjectionDepth: 2 });
 		expect(missingInjections).toEqual([]);
-		expect(timedOutLanguages).toEqual([]);
+		expect(outOfFuelLanguages).toEqual([]);
 
 		// The innermost CSS and JS regions are highlighted...
 		const cssSpans = realSpansInside(spans, cssStart, cssEnd);

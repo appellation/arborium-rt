@@ -123,15 +123,19 @@ pub struct HighlightSpansResult {
     pub spans: Vec<ThemedSpan>,
     /// Languages referenced by injections but not bundled in this addon.
     pub missing_injections: Vec<String>,
-    /// Languages whose parse exceeded the wall-clock budget (partial output).
-    pub timed_out_languages: Vec<String>,
+    /// Languages whose highlighting is incomplete because the call's query
+    /// fuel ran out (partial output).
+    pub out_of_fuel_languages: Vec<String>,
+    /// Query fuel this call consumed, out of `arborium_rt::highlight::HIGHLIGHT_FUEL`.
+    pub fuel_used: u32,
 }
 
 #[napi(object)]
 pub struct HighlightHtmlResult {
     pub html: String,
     pub missing_injections: Vec<String>,
-    pub timed_out_languages: Vec<String>,
+    pub out_of_fuel_languages: Vec<String>,
+    pub fuel_used: u32,
 }
 
 /// A raw highlight-query capture span (UTF-16 offsets, not themed).
@@ -156,7 +160,11 @@ pub struct ParseInjection {
 pub struct ParseResult {
     pub spans: Vec<ParseSpan>,
     pub injections: Vec<ParseInjection>,
-    pub timed_out: bool,
+    /// Query fuel this parse consumed, out of the runtime's default
+    /// single-query allotment.
+    pub fuel_used: u32,
+    /// True if that allotment ran out mid-query (partial output).
+    pub out_of_fuel: bool,
 }
 
 /// Options for span highlighting. `maxInjectionDepth` defaults to 3.
@@ -191,7 +199,8 @@ fn run_spans(reg: &mut Registry, session: u32, depth: u32) -> Result<HighlightSp
             })
             .collect(),
         missing_injections: out.missing_injections,
-        timed_out_languages: out.timed_out_languages,
+        out_of_fuel_languages: out.out_of_fuel_languages,
+        fuel_used: out.fuel_used,
     })
 }
 
@@ -207,7 +216,8 @@ fn run_html(reg: &mut Registry, session: u32, opts: &HtmlOptions) -> Result<High
     Ok(HighlightHtmlResult {
         html: out.html,
         missing_injections: out.missing_injections,
-        timed_out_languages: out.timed_out_languages,
+        out_of_fuel_languages: out.out_of_fuel_languages,
+        fuel_used: out.fuel_used,
     })
 }
 
@@ -237,7 +247,8 @@ fn run_parse(reg: &mut Registry, session: u32) -> Result<ParseResult> {
                 include_children: i.include_children,
             })
             .collect(),
-        timed_out: result.timed_out,
+        fuel_used: result.fuel_used,
+        out_of_fuel: result.out_of_fuel,
     })
 }
 

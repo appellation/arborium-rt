@@ -1,0 +1,414 @@
+From 88f6b92a428411d00808bfcbc1e12f097bbb9463 Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Thu, 30 Apr 2026 22:59:33 +0000
+Subject: [PATCH] wire: add fuel accounting to ParseResult; plugin-runtime:
+ meter query work with fuel
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+QueryCursor is O(n^2) on patterns rooted at left-recursive AST nodes
+(kotlin/swift navigation_expression, javascript member_expression). At
+~16 KB of attacker-shaped input ('a' + '.b()'.repeat(4000)) a single
+parse_raw call takes ~3 s, freezing the host renderer.
+
+Bound that with *fuel* — a model of the query work done — rather than
+elapsed wall-clock time:
+
+1. arborium-wire: add 'fuel_used: u32' and 'out_of_fuel: bool' to
+   Utf8ParseResult and Utf16ParseResult. Required (not
+   #[serde(default)]) because the downstream consumer always ships in
+   lockstep with the producer.
+
+2. arborium-plugin-runtime: install a fuel meter via tree-sitter's
+   ts_query_cursor_exec_with_options progress callback. The callback
+   fires inside the cursor's hot loop, interrupting the actual O(n^2)
+   work — unlike the existing 'cancelled' AtomicBool flag, which is
+   checked between matches and can't fire while one match.next() call
+   is grinding through quadratic state-pool transitions.
+
+   tree-sitter consults the callback once per 100 operations of its
+   advance loop (OP_COUNT_PER_QUERY_CALLBACK_CHECK in query.c), so each
+   tick bills for the 100 operations that just ran (OPS_PER_TICK),
+   each priced by a cost model of the advance loop: FUEL_PER_OPERATION
+   for stepping the cursor plus FUEL_PER_LIVE_STATE per in-progress
+   match it had to touch, read from the state count the previous patch
+   publishes. The closure captures a Cell<u32> by reference and Breaks
+   once the allotment is spent; after the matches loop, parse_raw reads
+   the cell and bubbles the cost up
+   through parse() / parse_utf16() into ParseResult.fuel_used /
+   .out_of_fuel. When the cursor is cut off it returns whatever spans it
+   produced so far — partial highlights instead of a multi-second
+   freeze.
+
+   The 150:1 ratio between those two terms was fitted by measurement:
+   milliseconds-per-fuel then holds within ~2x across everything from
+   small source files to the chain bombs, where charging per tick alone
+   is off by 70x (the attack's operations are few but each is enormous)
+   and charging per state-visit alone is off by 130x the other way.
+
+   Fuel rather than time buys three things. It's deterministic: a given
+   (query, tree) pair always costs the same, so the cutoff can't move
+   under a loaded CPU, a throttled background tab, or a debugger pause,
+   and tests can assert on it exactly. It's divisible: parse_with_fuel /
+   parse_utf16_with_fuel take the allotment as an argument, so a caller
+   highlighting one document across several grammars (primary parse plus
+   injections) can thread a single pool through every query and bound
+   the document as a whole — a per-call time budget instead lets N
+   injected blocks cost N x the budget. And it drops the std::time
+   dependency, so the wasm host no longer needs clock_gettime.
+
+   The trade is that fuel bounds work, not seconds: a slower machine
+   takes longer to burn the same allotment rather than truncating
+   sooner. Sizing the allotment for the slowest host that matters is the
+   caller's job — see arborium_rt::highlight::HIGHLIGHT_FUEL.
+
+Grammar-agnostic: any future O(n^2) query, in any language, is
+bounded by the same primitive.
+---
+diff --git a/crates/arborium-plugin-runtime/src/lib.rs b/crates/arborium-plugin-runtime/src/lib.rs
+index abf0eee..0d1f176 100644
+--- a/crates/arborium-plugin-runtime/src/lib.rs
++++ b/crates/arborium-plugin-runtime/src/lib.rs
+@@ -48,10 +48,13 @@ use arborium_sysroot as _;
+ use alloc::collections::BTreeMap;
+ use alloc::string::String;
+ use alloc::vec::Vec;
++use core::cell::Cell;
++use core::ops::ControlFlow;
+ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+ 
+ use arborium_tree_sitter::{
+-    InputEdit, Language, Parser, Point, Query, QueryCursor, QueryError, StreamingIterator, Tree,
++    InputEdit, Language, Parser, Point, Query, QueryCursor, QueryCursorOptions, QueryCursorState,
++    QueryError, StreamingIterator, Tree,
+ };
+ use arborium_wire::{
+     Edit, ParseError, Utf8Injection, Utf8ParseResult, Utf8Span, Utf16Injection, Utf16ParseResult,
+@@ -235,6 +238,63 @@ pub struct PluginRuntime {
+     next_session_id: AtomicU32,
+ }
+ 
++/// Query-cursor operations that have run between two ticks of the progress
++/// callback.
++///
++/// tree-sitter consults the callback once every
++/// `OP_COUNT_PER_QUERY_CALLBACK_CHECK` (= 100) operations of its advance
++/// loop (`query.c`), so that is the granularity at which fuel can be
++/// metered: each tick bills for the 100 operations just executed.
++pub const OPS_PER_TICK: u32 = 100;
++
++/// Fuel charged for one cursor operation, independent of how many matches
++/// are in flight — the fixed cost of stepping the tree cursor and testing
++/// the current node.
++///
++/// Together with [`FUEL_PER_LIVE_STATE`] this is a cost model for
++/// `ts_query_cursor__advance`, whose real cost per operation is
++/// `base + per_state × live states`: the loop touches every in-progress
++/// match on every step. The ratio 150:1 was fitted by timing both extremes
++/// in the browser runtime — ordinary source files, which keep only a
++/// handful of states alive (so almost all of their cost is the base term),
++/// against the quadratic chain-bomb shapes this budget exists to stop,
++/// which keep thousands alive (so almost all of theirs is the per-state
++/// term). Under the combined model, milliseconds-per-fuel varies about 2×
++/// across that whole range; charging by operations alone or by state-visits
++/// alone is off by 70× and 130× respectively, which would make any single
++/// cutoff either useless against the attack or ruinous for large ordinary
++/// files.
++pub const FUEL_PER_OPERATION: u32 = 150;
++
++/// Fuel charged per in-progress query state a cursor operation touches.
++/// The unit of fuel, in other words, is one state-visit. See
++/// [`FUEL_PER_OPERATION`].
++pub const FUEL_PER_LIVE_STATE: u32 = 1;
++
++/// Fuel allotted to a bare [`PluginRuntime::parse`] /
++/// [`PluginRuntime::parse_utf16`] call, i.e. one query execution with no
++/// caller-supplied budget.
++///
++/// Sized so that legitimate source files finish comfortably while the
++/// quadratic-query blowup below is cut off — see
++/// `arborium_rt::highlight::HIGHLIGHT_FUEL`, which uses the same figure for
++/// a whole document. Callers running a multi-grammar pipeline (a primary
++/// parse plus injections) should allot one shared pool across the document
++/// via [`PluginRuntime::parse_with_fuel`] rather than taking this default
++/// per call, so total cost is bounded no matter how many injected blocks
++/// the document contains.
++pub const DEFAULT_QUERY_FUEL: u32 = 80_000_000;
++
++/// What one query execution cost, and whether it finished.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct FuelSpent {
++    /// Fuel consumed. May overshoot the allotment by up to one tick's
++    /// worth, since the cursor is only interruptible at tick boundaries.
++    pub used: u32,
++    /// True if the allotment ran out and the cursor was cut off mid-query.
++    pub out_of_fuel: bool,
++}
++
+ impl PluginRuntime {
+     /// Create a new plugin runtime with the given highlight configuration.
+     pub fn new(config: HighlightConfig) -> Self {
+@@ -312,10 +372,21 @@ impl PluginRuntime {
+     }
+ 
+     /// Internal: execute query and collect raw spans/injections with byte offsets.
++    ///
++    /// `fuel` bounds how much query-cursor work this call may do; the
++    /// returned [`FuelSpent`] reports what it actually cost and whether the
++    /// cursor was cut off. A cut-off cursor yields partial output — whatever
++    /// spans and injections it had produced when fuel ran dry.
+     fn parse_raw(
+         &mut self,
+         session_id: u32,
+-    ) -> Result<(String, Vec<RawSpan>, Vec<RawInjection>), ParseError> {
++        fuel: u32,
++    ) -> Result<(String, Vec<RawSpan>, Vec<RawInjection>, FuelSpent), ParseError> {
++        const NO_FUEL_SPENT: FuelSpent = FuelSpent {
++            used: 0,
++            out_of_fuel: false,
++        };
++
+         let session = self
+             .sessions
+             .get_mut(&session_id)
+@@ -323,7 +394,7 @@ impl PluginRuntime {
+ 
+         // Check for cancellation
+         if session.cancelled.load(Ordering::Relaxed) {
+-            return Ok((String::new(), Vec::new(), Vec::new()));
++            return Ok((String::new(), Vec::new(), Vec::new(), NO_FUEL_SPENT));
+         }
+ 
+         let tree = session
+@@ -338,8 +409,59 @@ impl PluginRuntime {
+         let source = text.as_bytes();
+         let root = tree.root_node();
+ 
++        // Fuel budget for query execution.
++        //
++        // tree-sitter's QueryCursor is O(n^2) on patterns rooted at left-
++        // recursive AST nodes (kotlin/swift navigation_expression,
++        // javascript member_expression, etc.). At 16 KB of attacker-shaped
++        // input — `a.b().b().b()…` — a single query takes ~3 s, freezing
++        // the host renderer. The progress callback below fires inside
++        // ts_query_cursor_exec's hot loop, so it can interrupt the actual
++        // work — unlike the cooperative `cancelled` flag below, which is
++        // checked between matches and never gets a chance to fire while
++        // one match.next() call is grinding through quadratic state-pool
++        // transitions.
++        //
++        // The meter is modelled query work, not elapsed time. That buys
++        // determinism — a given (query, tree) pair always costs the same
++        // fuel, so the cutoff is reproducible across machines and immune to
++        // a loaded CPU or a debugger pause — and divisibility: because the
++        // caller passes the allotment in, one pool can cover the many query
++        // executions that make up a single document (primary parse plus
++        // injections). The trade is that a slower machine takes longer to
++        // burn the same fuel rather than truncating sooner; the budget bounds
++        // work, and it is up to the caller's allotment to keep that work
++        // small enough to be a bounded amount of time on the slowest host it
++        // cares about.
++        let spent = Cell::new(0u32);
++        let spent_ref = &spent;
++        let mut burn_fuel = move |state: &QueryCursorState| -> ControlFlow<()> {
++            // Bill the 100 operations that ran since the last tick, each at
++            // the cost model's rate for however many matches were in flight.
++            // Saturating throughout: a deep enough chain bomb overflows u32
++            // fuel, and pinning at the ceiling is exactly the right answer
++            // there — it is well past any allotment a caller would grant.
++            let live_states = state.in_progress_state_count() as u32;
++            let per_op =
++                FUEL_PER_OPERATION.saturating_add(FUEL_PER_LIVE_STATE.saturating_mul(live_states));
++            let used = spent_ref
++                .get()
++                .saturating_add(OPS_PER_TICK.saturating_mul(per_op));
++            spent_ref.set(used);
++            if used >= fuel {
++                ControlFlow::Break(())
++            } else {
++                ControlFlow::Continue(())
++            }
++        };
++
+         // Execute the query using streaming iterator
+-        let mut matches = session.cursor.matches(&self.config.query, root, source);
++        let mut matches = session.cursor.matches_with_options(
++            &self.config.query,
++            root,
++            source,
++            QueryCursorOptions::new().progress_callback(&mut burn_fuel),
++        );
+ 
+         let mut check_count = 0;
+         const CANCELLATION_CHECK_INTERVAL: usize = 100;
+@@ -350,7 +472,7 @@ impl PluginRuntime {
+             if check_count >= CANCELLATION_CHECK_INTERVAL {
+                 check_count = 0;
+                 if session.cancelled.load(Ordering::Relaxed) {
+-                    return Ok((String::new(), Vec::new(), Vec::new()));
++                    return Ok((String::new(), Vec::new(), Vec::new(), NO_FUEL_SPENT));
+                 }
+             }
+ 
+@@ -431,7 +553,16 @@ impl PluginRuntime {
+             }
+         }
+ 
+-        Ok((text, raw_spans, raw_injections))
++        let used = spent.get();
++        Ok((
++            text,
++            raw_spans,
++            raw_injections,
++            FuelSpent {
++                used,
++                out_of_fuel: used >= fuel,
++            },
++        ))
+     }
+ 
+     /// Parse the current text and return spans and injections with UTF-8 byte offsets.
+@@ -440,8 +571,25 @@ impl PluginRuntime {
+     /// UTF-8 byte boundaries.
+     ///
+     /// If cancelled, returns an empty result.
++    ///
++    /// Runs on [`DEFAULT_QUERY_FUEL`]; use [`Self::parse_with_fuel`] to
++    /// share one budget across several parses.
+     pub fn parse(&mut self, session_id: u32) -> Result<Utf8ParseResult, ParseError> {
+-        let (_text, raw_spans, raw_injections) = self.parse_raw(session_id)?;
++        self.parse_with_fuel(session_id, DEFAULT_QUERY_FUEL)
++    }
++
++    /// [`Self::parse`], with an explicit fuel allotment.
++    ///
++    /// The result's `fuel_used` / `out_of_fuel` report what the query cost
++    /// and whether it was cut off. Callers highlighting a document made of
++    /// several languages should thread one pool through every call
++    /// (`pool -= result.fuel_used`) so the document as a whole is bounded.
++    pub fn parse_with_fuel(
++        &mut self,
++        session_id: u32,
++        fuel: u32,
++    ) -> Result<Utf8ParseResult, ParseError> {
++        let (_text, raw_spans, raw_injections, spent) = self.parse_raw(session_id, fuel)?;
+ 
+         // Convert to UTF-8 spans (just cast the byte offsets)
+         let mut spans: Vec<Utf8Span> = raw_spans
+@@ -468,7 +616,12 @@ impl PluginRuntime {
+             })
+             .collect();
+ 
+-        Ok(Utf8ParseResult { spans, injections })
++        Ok(Utf8ParseResult {
++            spans,
++            injections,
++            fuel_used: spent.used,
++            out_of_fuel: spent.out_of_fuel,
++        })
+     }
+ 
+     /// Parse the current text and return spans and injections with UTF-16 code unit indices.
+@@ -477,11 +630,28 @@ impl PluginRuntime {
+     /// DOM APIs use UTF-16 code unit indices.
+     ///
+     /// If cancelled, returns an empty result.
++    ///
++    /// Runs on [`DEFAULT_QUERY_FUEL`]; use [`Self::parse_utf16_with_fuel`]
++    /// to share one budget across several parses.
+     pub fn parse_utf16(&mut self, session_id: u32) -> Result<Utf16ParseResult, ParseError> {
+-        let (text, raw_spans, raw_injections) = self.parse_raw(session_id)?;
++        self.parse_utf16_with_fuel(session_id, DEFAULT_QUERY_FUEL)
++    }
++
++    /// [`Self::parse_utf16`], with an explicit fuel allotment. See
++    /// [`Self::parse_with_fuel`].
++    pub fn parse_utf16_with_fuel(
++        &mut self,
++        session_id: u32,
++        fuel: u32,
++    ) -> Result<Utf16ParseResult, ParseError> {
++        let (text, raw_spans, raw_injections, spent) = self.parse_raw(session_id, fuel)?;
+ 
+         if raw_spans.is_empty() && raw_injections.is_empty() {
+-            return Ok(Utf16ParseResult::empty());
++            return Ok(Utf16ParseResult {
++                fuel_used: spent.used,
++                out_of_fuel: spent.out_of_fuel,
++                ..Utf16ParseResult::empty()
++            });
+         }
+ 
+         // Collect all byte offsets and batch convert to UTF-16
+@@ -533,7 +703,12 @@ impl PluginRuntime {
+             })
+             .collect();
+ 
+-        Ok(Utf16ParseResult { spans, injections })
++        Ok(Utf16ParseResult {
++            spans,
++            injections,
++            fuel_used: spent.used,
++            out_of_fuel: spent.out_of_fuel,
++        })
+     }
+ 
+     /// Get the language provided by this plugin.
+diff --git a/crates/arborium-wire/src/lib.rs b/crates/arborium-wire/src/lib.rs
+index 8124483..ef0fee9 100644
+--- a/crates/arborium-wire/src/lib.rs
++++ b/crates/arborium-wire/src/lib.rs
+@@ -79,6 +79,21 @@ pub struct Utf8ParseResult {
+     pub spans: Vec<Utf8Span>,
+     /// Injection points for other languages.
+     pub injections: Vec<Utf8Injection>,
++    /// Query fuel consumed by this parse.
++    ///
++    /// Fuel models the work tree-sitter's query cursor did — operations
++    /// weighted by how many candidate matches each one had to touch —
++    /// rather than how long it took, so a given (query, tree) pair always
++    /// costs the same amount, on any machine. Charged in blocks of 100
++    /// operations (the cursor's progress-callback interval), so a document
++    /// too small to reach the first block reports 0.
++    pub fuel_used: u32,
++    /// True if the fuel the caller allotted ran out before the QueryCursor
++    /// finished. `spans` and `injections` then hold whatever was collected
++    /// before fuel ran dry — partial output. The caller can use this to
++    /// surface "highlighting was interrupted" in UI or telemetry, or to
++    /// fall back to a different highlighter.
++    pub out_of_fuel: bool,
+ }
+ 
+ impl Utf8ParseResult {
+@@ -87,6 +102,8 @@ impl Utf8ParseResult {
+         Self {
+             spans: Vec::new(),
+             injections: Vec::new(),
++            fuel_used: 0,
++            out_of_fuel: false,
+         }
+     }
+ }
+@@ -137,6 +154,10 @@ pub struct Utf16ParseResult {
+     pub spans: Vec<Utf16Span>,
+     /// Injection points for other languages.
+     pub injections: Vec<Utf16Injection>,
++    /// See [`Utf8ParseResult::fuel_used`].
++    pub fuel_used: u32,
++    /// See [`Utf8ParseResult::out_of_fuel`].
++    pub out_of_fuel: bool,
+ }
+ 
+ impl Utf16ParseResult {
+@@ -145,6 +166,8 @@ impl Utf16ParseResult {
+         Self {
+             spans: Vec::new(),
+             injections: Vec::new(),
++            fuel_used: 0,
++            out_of_fuel: false,
+         }
+     }
+ }
+-- 
+2.34.1

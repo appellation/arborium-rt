@@ -1,0 +1,99 @@
+From 3a5c8e1d7b9f4e2a6c0d8b3f5a7e9c1d4b6f8a20 Mon Sep 17 00:00:00 2001
+From: Will Nelson <will.nelson@discordapp.com>
+Date: Thu, 20 Aug 2026 00:00:01 +0000
+Subject: [PATCH] tree-sitter: expose the in-progress query state count
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Teach arborium's vendored copy of the tree-sitter C runtime — the one
+this repo actually runs, compiled into the emscripten MAIN_MODULE host by
+`build wasm host` and statically into the Node addon by lib/node/build.rs
+— to publish how much work a query cursor is doing, and expose it on the
+Rust binding.
+
+- include/tree_sitter/api.h, src/query.c: publish `states.size` on
+  TSQueryCursorState next to current_byte_offset, set only when a
+  progress callback is installed. Appended to the struct, so readers of
+  the existing two fields stay layout-compatible.
+- binding_rust/{bindings,lib}.rs: mirror the field and expose it as
+  `QueryCursorState::in_progress_state_count()`.
+
+Why: a progress callback that can see only current_byte_offset cannot
+tell cheap query work from expensive. ts_query_cursor__advance touches
+every in-progress match on every operation, so cost per operation is
+`base + per_state × states.size`, and states.size spans four orders of
+magnitude between an ordinary source file and a pattern rooted at a
+left-recursive node on deeply chained input. arborium-plugin-runtime's
+fuel meter (next patch) weights each tick by this count; without it,
+metering ticks alone under-charges the quadratic case by ~70x.
+---
+diff --git a/crates/arborium-tree-sitter/binding_rust/bindings.rs b/crates/arborium-tree-sitter/binding_rust/bindings.rs
+index ec00a7c..bd6c498 100644
+--- a/crates/arborium-tree-sitter/binding_rust/bindings.rs
++++ b/crates/arborium-tree-sitter/binding_rust/bindings.rs
+@@ -173,6 +173,7 @@ pub type TSQueryError = ::core::ffi::c_uint;
+ pub struct TSQueryCursorState {
+     pub payload: *mut ::core::ffi::c_void,
+     pub current_byte_offset: u32,
++    pub in_progress_state_count: u32,
+ }
+ #[repr(C)]
+ #[derive(Debug, Copy, Clone)]
+diff --git a/crates/arborium-tree-sitter/binding_rust/lib.rs b/crates/arborium-tree-sitter/binding_rust/lib.rs
+index a83a2f0..4116984 100644
+--- a/crates/arborium-tree-sitter/binding_rust/lib.rs
++++ b/crates/arborium-tree-sitter/binding_rust/lib.rs
+@@ -204,6 +204,20 @@ impl QueryCursorState {
+     pub const fn current_byte_offset(&self) -> usize {
+         unsafe { self.0.as_ref() }.current_byte_offset as usize
+     }
++
++    /// How many in-progress query states the cursor is currently tracking.
++    ///
++    /// The cursor's advance loop touches every live state on each operation,
++    /// so this is the multiplier on the loop's per-operation cost: a query
++    /// whose pattern keeps thousands of candidate matches alive (patterns
++    /// rooted at left-recursive nodes, on deeply chained input) does
++    /// thousands of times the work per operation that an ordinary one does.
++    /// Callers metering query work — rather than wall-clock time — should
++    /// weight by this.
++    #[must_use]
++    pub const fn in_progress_state_count(&self) -> usize {
++        unsafe { self.0.as_ref() }.in_progress_state_count as usize
++    }
+ }
+ 
+ #[derive(Default)]
+diff --git a/crates/arborium-tree-sitter/include/tree_sitter/api.h b/crates/arborium-tree-sitter/include/tree_sitter/api.h
+index 22c85d4..af2601d 100644
+--- a/crates/arborium-tree-sitter/include/tree_sitter/api.h
++++ b/crates/arborium-tree-sitter/include/tree_sitter/api.h
+@@ -179,6 +179,13 @@ typedef enum TSQueryError {
+ typedef struct TSQueryCursorState {
+   void *payload;
+   uint32_t current_byte_offset;
++  /**
++   * How many in-progress matches the cursor is tracking. The advance loop
++   * touches every one of them on each operation, so this is the multiplier
++   * on the cursor's per-operation cost — a caller metering query work
++   * (rather than elapsed time) should weight by it.
++   */
++  uint32_t in_progress_state_count;
+ } TSQueryCursorState;
+ 
+ typedef struct TSQueryCursorOptions {
+diff --git a/crates/arborium-tree-sitter/src/query.c b/crates/arborium-tree-sitter/src/query.c
+index f47616b..9f0e7ee 100644
+--- a/crates/arborium-tree-sitter/src/query.c
++++ b/crates/arborium-tree-sitter/src/query.c
+@@ -3776,6 +3776,7 @@ static inline bool ts_query_cursor__advance(
+ 
+     if (self->query_options && self->query_options->progress_callback) {
+       self->query_state.current_byte_offset = ts_node_start_byte(ts_tree_cursor_current_node(&self->cursor));
++      self->query_state.in_progress_state_count = self->states.size;
+     }
+     if (
+       did_match ||
+-- 
+2.34.1

@@ -40,10 +40,19 @@ export interface ParseResult {
 	spans: ParseSpan[];
 	injections: ParseInjection[];
 	/**
-	 * `true` if the runtime's wall-clock query budget fired before the
+	 * Query fuel this parse consumed. Fuel models the work tree-sitter's
+	 * query cursor did — operations weighted by how many candidate matches
+	 * each one had to touch — in place of wall-clock time, so a given
+	 * (query, tree) pair always costs the same, on any machine. Charged in
+	 * blocks of 100 cursor operations, so a document too small to reach the
+	 * first block reports 0.
+	 */
+	fuelUsed: number;
+	/**
+	 * `true` if the fuel allotted to this parse ran out before the
 	 * QueryCursor finished. `spans` then holds partial output.
 	 */
-	timedOut: boolean;
+	outOfFuel: boolean;
 }
 
 export interface HighlightOptions {
@@ -67,17 +76,25 @@ export interface HighlightSpansResult {
 	/** Languages referenced by injections but not bundled in this addon. */
 	missingInjections: string[];
 	/**
-	 * Language names whose parse exceeded the runtime's wall-clock query
-	 * budget. Empty when nothing timed out. Sorted, deduplicated.
+	 * Language names whose highlighting is incomplete because the call ran
+	 * out of query fuel — a fixed allowance of tree-sitter query-cursor
+	 * operations shared by the primary parse and every injected sub-parse.
+	 * Empty when the whole document fit in budget. Sorted, deduplicated.
 	 */
-	timedOutLanguages: string[];
+	outOfFuelLanguages: string[];
+	/**
+	 * Query fuel this call consumed across every parse it ran. Deterministic
+	 * for a given document, so it doubles as a cost metric.
+	 */
+	fuelUsed: number;
 }
 
 /** Result from `highlightToHtml`, including any missing injection grammars. */
 export interface HighlightHtmlResult {
 	html: string;
 	missingInjections: string[];
-	timedOutLanguages: string[];
+	outOfFuelLanguages: string[];
+	fuelUsed: number;
 }
 
 /**

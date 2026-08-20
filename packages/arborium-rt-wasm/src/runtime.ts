@@ -140,22 +140,37 @@ export interface HighlightSpansResult {
 	 */
 	missingInjections: string[];
 	/**
-	 * Language names whose parse exceeded the runtime's per-call wall-clock
-	 * query budget (~100 ms, enforced inside the QueryCursor's hot loop)
-	 * before the cursor finished. Empty when nothing timed out. When
-	 * non-empty, `spans` contains whatever the cursor produced before the
-	 * budget expired — partial output.
+	 * Language names whose highlighting is incomplete because this call ran
+	 * out of *query fuel* — a fixed allowance of tree-sitter query-cursor
+	 * operations, enforced inside the QueryCursor's hot loop and shared by
+	 * the primary parse and every injected sub-parse. A language lands here
+	 * either because its own query was cut off mid-run, or because it sat in
+	 * an injected block reached after the pool was already drained and was
+	 * skipped. Empty when the whole document fit in budget; when non-empty,
+	 * `spans` holds whatever was resolved before the pool ran dry — partial
+	 * output.
+	 *
+	 * Fuel rather than elapsed time means the cutoff is deterministic: the
+	 * same document always highlights the same way, whether the CPU is idle
+	 * or the tab is throttled in the background.
 	 *
 	 * The list is per-language because injections highlight independently:
 	 * highlighting markdown that injects a kotlin code block can produce
-	 * `["kotlin"]` (kotlin's chain-bomb-shaped query timed out) while the
-	 * markdown frame around it completed normally. Use the language to
-	 * tag metrics, render a per-grammar "interrupted" badge, or fall back
+	 * `["kotlin"]` (kotlin's chain-bomb-shaped query burned the pool) while
+	 * the markdown frame around it completed normally. Use the language to
+	 * tag metrics, render a per-grammar "interrupted" badge, or fall back to
 	 * an alternate highlighter only for the affected language.
 	 *
 	 * Sorted, deduplicated.
 	 */
-	timedOutLanguages: string[];
+	outOfFuelLanguages: string[];
+	/**
+	 * Query fuel this call consumed, summed across the primary parse and
+	 * every injected sub-parse. Deterministic for a given document, so it
+	 * doubles as a cost metric: track the distribution to see how much
+	 * headroom real traffic leaves before the cap bites.
+	 */
+	fuelUsed: number;
 }
 
 /** Result from {@link Session.highlightToHtml} including any missing injection grammars. */
@@ -167,8 +182,10 @@ export interface HighlightHtmlResult {
 	 * If non-empty, the caller may want to load these grammars and retry.
 	 */
 	missingInjections: string[];
-	/** See {@link HighlightSpansResult.timedOutLanguages}. */
-	timedOutLanguages: string[];
+	/** See {@link HighlightSpansResult.outOfFuelLanguages}. */
+	outOfFuelLanguages: string[];
+	/** See {@link HighlightSpansResult.fuelUsed}. */
+	fuelUsed: number;
 }
 
 /**
@@ -344,7 +361,7 @@ export class Session {
 				),
 			(json) =>
 				json.length === 0
-					? { spans: [], injections: [], timed_out: false }
+					? { spans: [], injections: [], fuel_used: 0, out_of_fuel: false }
 					: (JSON.parse(json) as Utf16ParseResult),
 		);
 	}
@@ -371,7 +388,12 @@ export class Session {
 				),
 			(json) => {
 				if (json.length === 0) {
-					return { spans: [], missing_injections: [], timed_out_languages: [] };
+					return {
+						spans: [],
+						missing_injections: [],
+						out_of_fuel_languages: [],
+						fuel_used: 0,
+					};
 				}
 				return JSON.parse(json) as ThemedHighlightResult;
 			},
@@ -380,7 +402,8 @@ export class Session {
 		return {
 			spans: result.spans,
 			missingInjections: result.missing_injections,
-			timedOutLanguages: result.timed_out_languages,
+			outOfFuelLanguages: result.out_of_fuel_languages,
+			fuelUsed: result.fuel_used,
 		};
 	}
 
@@ -418,7 +441,8 @@ export class Session {
 						return {
 							html: "",
 							missing_injections: [],
-							timed_out_languages: [],
+							out_of_fuel_languages: [],
+							fuel_used: 0,
 						};
 					}
 					return JSON.parse(json) as HtmlHighlightResult;
@@ -428,7 +452,8 @@ export class Session {
 			return {
 				html: result.html,
 				missingInjections: result.missing_injections,
-				timedOutLanguages: result.timed_out_languages,
+				outOfFuelLanguages: result.out_of_fuel_languages,
+				fuelUsed: result.fuel_used,
 			};
 		} finally {
 			if (prefixPtr) host._free(prefixPtr);

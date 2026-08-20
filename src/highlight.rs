@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 
 use arborium_highlight::{HtmlFormat, Span, html_escape};
 use arborium_theme::{tag_for_capture, tag_to_name};
-use arborium_wire::Utf8Injection;
+use arborium_wire::{Utf8Injection, Utf8ParseResult};
 use serde::Serialize;
 
 use crate::registry::Registry;
@@ -29,6 +29,34 @@ use crate::registry::Registry;
 /// Hard upper bound for recursion depth even when a caller passes a huge
 /// value — prevents pathological grammars from blowing the stack.
 const MAX_INJECTION_DEPTH: u32 = 32;
+
+/// Query fuel for one highlight call, shared by the primary parse and every
+/// injected sub-parse beneath it.
+///
+/// Fuel models the work tree-sitter's query cursor does — cursor operations
+/// weighted by how many candidate matches each one has to touch (see
+/// `arborium_plugin_runtime::FUEL_PER_OPERATION`) — instead of racing a wall
+/// clock. That buys two things a deadline can't:
+///
+/// - **Determinism.** The same document always costs the same fuel, on any
+///   machine. A loaded CPU, a throttled background tab, or a paused
+///   debugger can't silently shrink the budget and truncate highlights that
+///   would otherwise render fine, and tests can assert on the cutoff.
+/// - **A per-document ceiling.** One pool covers every query in the call, so
+///   a document is bounded as a whole. Under a per-query budget, a page
+///   holding N injected chain-bomb code blocks costs N × the budget; here
+///   the first blocks drain the pool and the rest are reported as starved.
+///
+/// The trade is that fuel bounds work, not seconds — a slower machine takes
+/// longer to burn the pool rather than truncating sooner — so the size is a
+/// calibration against the slowest host we care about. 80e6 measured at
+/// 2–3.5 ms per 1e6 fuel in the browser runtime, i.e. ~200–280 ms of
+/// worst-case highlighting, and it leaves ordinary documents untouched:
+/// ~750 KB of TypeScript costs ~52e6, and the 16 KB kotlin `a.b().b()…`
+/// chain this guard exists for wants ~1.36e9 (17× the pool) so it is cut
+/// off early. `packages/arborium-rt-wasm/test/fuel.test.mts` pins both ends
+/// of that range.
+pub const HIGHLIGHT_FUEL: u32 = 80_000_000;
 
 #[derive(Debug)]
 pub enum HighlightError {
@@ -56,15 +84,23 @@ pub struct WireThemedOutput {
     /// Languages referenced by injection queries but not loaded in the
     /// registry. JavaScript can use this to auto-load grammars and retry.
     pub missing_injections: Vec<String>,
-    /// Language names whose parse exceeded the runtime's wall-clock query
-    /// budget. Empty when no parse timed out. When non-empty, `spans`
-    /// contains whatever the cursor produced before the budget expired
-    /// — partial output. Consumers can use this to fall back to an
-    /// alternate highlighter, log a metric tagged by language, or
-    /// surface "interrupted" in UI per-grammar (e.g. "markdown
+    /// Language names whose highlighting is incomplete because the call's
+    /// fuel pool ran dry — either the grammar's own query was cut off
+    /// mid-run, or it was an injected block reached after the pool was
+    /// already empty and skipped. Empty when the whole document fit in
+    /// budget. When non-empty, `spans` holds whatever was resolved before
+    /// the pool drained — partial output. Consumers can use this to fall
+    /// back to an alternate highlighter, log a metric tagged by language,
+    /// or surface "interrupted" in UI per-grammar (e.g. "markdown
     /// highlighting was complete but the injected kotlin block was
     /// truncated"). Sorted; deduplicated.
-    pub timed_out_languages: Vec<String>,
+    pub out_of_fuel_languages: Vec<String>,
+    /// Fuel this call consumed out of [`HIGHLIGHT_FUEL`], summed across the
+    /// primary parse and every injected sub-parse. Deterministic for a given
+    /// document, which makes it usable as a cost metric: track the
+    /// distribution to see how much headroom real traffic leaves before
+    /// raising or lowering the cap.
+    pub fuel_used: u32,
 }
 
 #[derive(Serialize)]
@@ -73,8 +109,10 @@ pub struct WireHtmlOutput {
     /// Languages referenced by injection queries but not loaded in the
     /// registry. JavaScript can use this to auto-load grammars and retry.
     pub missing_injections: Vec<String>,
-    /// See [`WireThemedOutput::timed_out_languages`].
-    pub timed_out_languages: Vec<String>,
+    /// See [`WireThemedOutput::out_of_fuel_languages`].
+    pub out_of_fuel_languages: Vec<String>,
+    /// See [`WireThemedOutput::fuel_used`].
+    pub fuel_used: u32,
 }
 
 pub fn highlight_to_themed_utf16(
@@ -82,14 +120,15 @@ pub fn highlight_to_themed_utf16(
     session_id: u32,
     max_depth: u32,
 ) -> Result<WireThemedOutput, HighlightError> {
-    let (source, raw_spans, missing, timed_out) = collect_spans(reg, session_id, max_depth)?;
+    let (source, collected) = collect_spans(reg, session_id, max_depth)?;
 
-    let themed_byte = dedup_and_tag(raw_spans);
+    let themed_byte = dedup_and_tag(collected.spans);
     if themed_byte.is_empty() {
         return Ok(WireThemedOutput {
             spans: Vec::new(),
-            missing_injections: missing.into_iter().collect(),
-            timed_out_languages: sorted(timed_out),
+            missing_injections: collected.missing.into_iter().collect(),
+            out_of_fuel_languages: sorted(collected.out_of_fuel),
+            fuel_used: collected.fuel_used,
         });
     }
     let coalesced = coalesce_by_tag(themed_byte);
@@ -97,8 +136,9 @@ pub fn highlight_to_themed_utf16(
 
     Ok(WireThemedOutput {
         spans,
-        missing_injections: missing.into_iter().collect(),
-        timed_out_languages: sorted(timed_out),
+        missing_injections: collected.missing.into_iter().collect(),
+        out_of_fuel_languages: sorted(collected.out_of_fuel),
+        fuel_used: collected.fuel_used,
     })
 }
 
@@ -108,7 +148,7 @@ pub fn highlight_to_html(
     max_depth: u32,
     format: HtmlFormat,
 ) -> Result<WireHtmlOutput, HighlightError> {
-    let (source, raw_spans, missing, timed_out) = collect_spans(reg, session_id, max_depth)?;
+    let (source, collected) = collect_spans(reg, session_id, max_depth)?;
     // Render from the same resolved spans the themed path produces — NOT the
     // raw overlapping ones. `arborium_highlight::spans_to_html` runs its own
     // dedup over the raw set, which mis-resolves the overlapping captures that
@@ -117,11 +157,12 @@ pub fn highlight_to_html(
     // capture to the enclosing one. Routing through `dedup_and_tag` +
     // `coalesce_by_tag` keeps HTML output lock-step with
     // `highlight_to_themed_utf16`.
-    let tagged = coalesce_by_tag(dedup_and_tag(raw_spans));
+    let tagged = coalesce_by_tag(dedup_and_tag(collected.spans));
     Ok(WireHtmlOutput {
         html: tagged_spans_to_html(&source, tagged, &format),
-        missing_injections: missing.into_iter().collect(),
-        timed_out_languages: sorted(timed_out),
+        missing_injections: collected.missing.into_iter().collect(),
+        out_of_fuel_languages: sorted(collected.out_of_fuel),
+        fuel_used: collected.fuel_used,
     })
 }
 
@@ -134,16 +175,79 @@ fn sorted(set: HashSet<String>) -> Vec<String> {
     v
 }
 
-/// Walk the primary session + injections recursively. Returns the primary
-/// source text (for HTML emission / UTF-16 conversion), the full set of
-/// raw spans with UTF-8 byte offsets anchored to the primary document, and
-/// a set of language names that were referenced by injections but not found
-/// in the registry.
+/// Accumulator threaded through the whole walk: the raw spans resolved so
+/// far (UTF-8 byte offsets anchored to the primary document), the two
+/// per-language signals the wire outputs report, and the call's shared fuel
+/// pool.
+///
+/// One pool spans the whole document: the primary parse takes what it needs
+/// and each injected sub-parse gets whatever is left. Injections are visited
+/// depth-first in document order, so a greedy block starves the ones after
+/// it rather than every block paying its own separate budget.
+struct Collected {
+    spans: Vec<Span>,
+    /// Injected language names with no grammar in the registry.
+    missing: HashSet<String>,
+    /// Injected language names cut short or skipped by fuel exhaustion.
+    out_of_fuel: HashSet<String>,
+    /// Fuel left to spend on the queries still to come.
+    fuel_remaining: u32,
+    /// Fuel spent so far, summed across every query in the call.
+    fuel_used: u32,
+}
+
+impl Collected {
+    fn new(fuel: u32) -> Self {
+        Self {
+            spans: Vec::new(),
+            missing: HashSet::new(),
+            out_of_fuel: HashSet::new(),
+            fuel_remaining: fuel,
+            fuel_used: 0,
+        }
+    }
+
+    fn starved(&self) -> bool {
+        self.fuel_remaining == 0
+    }
+
+    /// Book one parse's result: charge its fuel against the pool, record
+    /// `language` as starved if its query was cut off, and take its spans,
+    /// shifted to primary-document offsets. Returns the injections it found,
+    /// for the caller to descend into.
+    ///
+    /// The runtime may overshoot its allotment by up to one tick (a query
+    /// cursor is only interruptible at tick boundaries), hence the
+    /// saturating arithmetic.
+    fn absorb(
+        &mut self,
+        language: &str,
+        result: Utf8ParseResult,
+        shift: u32,
+    ) -> Vec<Utf8Injection> {
+        self.fuel_remaining = self.fuel_remaining.saturating_sub(result.fuel_used);
+        self.fuel_used = self.fuel_used.saturating_add(result.fuel_used);
+        if result.out_of_fuel {
+            self.out_of_fuel.insert(language.to_string());
+        }
+        self.spans.extend(result.spans.into_iter().map(|s| Span {
+            start: s.start + shift,
+            end: s.end + shift,
+            capture: s.capture,
+            pattern_index: s.pattern_index,
+        }));
+        result.injections
+    }
+}
+
+/// Walk the primary session + injections recursively, spending one shared
+/// fuel pool across every query. Also returns the primary source text, for
+/// HTML emission / UTF-16 conversion.
 fn collect_spans(
     reg: &mut Registry,
     session_id: u32,
     max_depth: u32,
-) -> Result<(String, Vec<Span>, HashSet<String>, HashSet<String>), HighlightError> {
+) -> Result<(String, Collected), HighlightError> {
     let (primary_gid, primary_inner, source) = {
         let entry = reg
             .session(session_id)
@@ -151,9 +255,7 @@ fn collect_spans(
         (entry.grammar_id, entry.inner_id, entry.text.clone())
     };
 
-    let mut all_spans: Vec<Span> = Vec::new();
-    let mut missing_injections: HashSet<String> = HashSet::new();
-    let mut timed_out_languages: HashSet<String> = HashSet::new();
+    let mut out = Collected::new(HIGHLIGHT_FUEL);
 
     let primary_injections = {
         let grammar = reg
@@ -162,37 +264,17 @@ fn collect_spans(
         let primary_language = grammar.language_name.clone();
         let result = grammar
             .runtime
-            .parse(primary_inner)
+            .parse_with_fuel(primary_inner, out.fuel_remaining)
             .map_err(|_| HighlightError::Parse)?;
-        if result.timed_out {
-            timed_out_languages.insert(primary_language);
-        }
-        for s in result.spans {
-            all_spans.push(Span {
-                start: s.start,
-                end: s.end,
-                capture: s.capture,
-                pattern_index: s.pattern_index,
-            });
-        }
-        result.injections
+        out.absorb(&primary_language, result, 0)
     };
 
     let depth = max_depth.min(MAX_INJECTION_DEPTH);
     if depth > 0 {
-        process_injections(
-            reg,
-            &source,
-            primary_injections,
-            0,
-            depth,
-            &mut all_spans,
-            &mut missing_injections,
-            &mut timed_out_languages,
-        );
+        process_injections(reg, &source, primary_injections, 0, depth, &mut out);
     }
 
-    Ok((source, all_spans, missing_injections, timed_out_languages))
+    Ok((source, out))
 }
 
 fn process_injections(
@@ -201,15 +283,26 @@ fn process_injections(
     injections: Vec<Utf8Injection>,
     base_offset: u32,
     remaining_depth: u32,
-    all_spans: &mut Vec<Span>,
-    missing_injections: &mut HashSet<String>,
-    timed_out_languages: &mut HashSet<String>,
+    out: &mut Collected,
 ) {
     if remaining_depth == 0 {
         return;
     }
 
-    for inj in injections {
+    let mut injections = injections.into_iter();
+    for inj in injections.by_ref() {
+        // Pool drained by an earlier block. Don't even parse the remaining
+        // ranges: `set_text` below runs a full tree-sitter parse, which fuel
+        // doesn't meter, so a document holding hundreds of injected blocks
+        // would keep paying parse cost long after the query budget was gone.
+        // Report the rest as starved instead — their highlighting is missing
+        // for the same reason a cut-off query's is.
+        if out.starved() {
+            out.out_of_fuel.insert(inj.language);
+            out.out_of_fuel.extend(injections.map(|rest| rest.language));
+            return;
+        }
+
         let start = inj.start as usize;
         let end = inj.end as usize;
         if start >= end || end > source.len() {
@@ -221,7 +314,7 @@ fn process_injections(
         let Some(inj_gid) = reg.resolve_language(&inj.language) else {
             // Grammar not loaded (and not lazily loadable) — record the name
             // and skip this injection.
-            missing_injections.insert(inj.language.clone());
+            out.missing.insert(inj.language.clone());
             continue;
         };
 
@@ -234,7 +327,7 @@ fn process_injections(
             };
             let temp = grammar.runtime.create_session();
             grammar.runtime.set_text(temp, &injected_text);
-            let result = grammar.runtime.parse(temp);
+            let result = grammar.runtime.parse_with_fuel(temp, out.fuel_remaining);
             grammar.runtime.free_session(temp);
             match result {
                 Ok(r) => r,
@@ -243,29 +336,10 @@ fn process_injections(
         };
 
         let shift = base_offset + inj.start;
-        if inj_result.timed_out {
-            timed_out_languages.insert(inj.language.clone());
-        }
-        for s in inj_result.spans {
-            all_spans.push(Span {
-                start: s.start + shift,
-                end: s.end + shift,
-                capture: s.capture,
-                pattern_index: s.pattern_index,
-            });
-        }
+        let nested = out.absorb(&inj.language, inj_result, shift);
 
-        if !inj_result.injections.is_empty() {
-            process_injections(
-                reg,
-                &injected_text,
-                inj_result.injections,
-                shift,
-                remaining_depth - 1,
-                all_spans,
-                missing_injections,
-                timed_out_languages,
-            );
+        if !nested.is_empty() {
+            process_injections(reg, &injected_text, nested, shift, remaining_depth - 1, out);
         }
     }
 }

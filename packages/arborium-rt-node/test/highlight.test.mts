@@ -23,12 +23,12 @@ it("exposes the bundled languages", () => {
 });
 
 it("highlights a json document into themed spans", () => {
-	const { spans, missingInjections, timedOutLanguages } = highlightToSpans(
+	const { spans, missingInjections, outOfFuelLanguages } = highlightToSpans(
 		"json",
 		'{"a": 1}',
 	);
 	expect(missingInjections).toEqual([]);
-	expect(timedOutLanguages).toEqual([]);
+	expect(outOfFuelLanguages).toEqual([]);
 	// "a" (with quotes) is a string at UTF-16 [1,4); 1 is a number at [6,7).
 	expect(spans).toContainEqual({ start: 1, end: 4, tag: "s" });
 	expect(spans).toContainEqual({ start: 6, end: 7, tag: "n" });
@@ -92,7 +92,7 @@ it("resolves nested injections up to the depth limit", () => {
 
 		for (const r of [d0, d1, d2, d3]) {
 			expect(r.missingInjections).toEqual([]);
-			expect(r.timedOutLanguages).toEqual([]);
+			expect(r.outOfFuelLanguages).toEqual([]);
 		}
 
 		// Depth 0 and 1 don't reach the depth-2 css/js payloads.
@@ -129,4 +129,38 @@ it("reports missing injections for unbundled fenced languages", () => {
 		maxInjectionDepth: 2,
 	});
 	expect(missingInjections).toContain(missing);
+});
+
+// The addon links its own copy of the tree-sitter C runtime (arborium's,
+// compiled by lib/node/build.rs) rather than resolving ts_* against the
+// emscripten host, so the fuel meter has to be verified on this path too:
+// the per-tick charge reads a field the patched query.c publishes, and an
+// unpatched copy would silently mis-meter.
+it("bounds a chained-member DoS with the fuel pool", () => {
+	// javascript's member_expression is left-recursive, the same shape that
+	// makes the upstream kotlin highlights query quadratic: `a.b().b()…`
+	// costs ~1e9 fuel unmetered, well past the per-call pool.
+	const raw = `a${".b()".repeat(4000)}`;
+	const lines: string[] = [];
+	for (let i = 0; i < raw.length; i += 950) lines.push(raw.slice(i, i + 950));
+
+	const start = performance.now();
+	const result = highlightToSpans("javascript", lines.join("\n"));
+	const elapsed = performance.now() - start;
+
+	expect(result.outOfFuelLanguages).toEqual(["javascript"]);
+	// Mirrors HIGHLIGHT_FUEL in src/highlight.rs: spent the pool, stopped
+	// within one tick of it.
+	expect(result.fuelUsed).toBeGreaterThanOrEqual(80_000_000);
+	expect(result.fuelUsed).toBeLessThan(80_000_000 * 1.05);
+	expect(elapsed).toBeLessThan(1000);
+});
+
+it("reports fuel deterministically across runs", () => {
+	const source = `const x = ${"1 + ".repeat(2000)}1;\n`.repeat(20);
+	const a = highlightToSpans("javascript", source);
+	const b = highlightToSpans("javascript", source);
+	expect(a.outOfFuelLanguages).toEqual([]);
+	expect(a.fuelUsed).toBeGreaterThan(0);
+	expect(b.fuelUsed).toBe(a.fuelUsed);
 });

@@ -54,9 +54,6 @@ const EXTRA_LIBC_EXPORTS = [
 	// without this export the SIDE_MODULE's `iswpunct` import resolves to
 	// undefined and traps when the parser first reaches that scanner state.
 	"_iswpunct",
-	// Used by std::time::Instant in arborium-plugin-runtime's wall-clock
-	// budget (deadline check inside the QueryCursor progress callback).
-	"_clock_gettime",
 	"_getcwd",
 	"_getentropy",
 	"_getenv",

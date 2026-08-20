@@ -155,7 +155,7 @@ it("resolves nested injections (markdown → html → css/js) up to the depth li
 		// reported missing regardless of depth — depth alone gates resolution.
 		for (const r of [d0, d1, d2, d3]) {
 			expect(r.missingInjections).toEqual([]);
-			expect(r.timedOutLanguages).toEqual([]);
+			expect(r.outOfFuelLanguages).toEqual([]);
 		}
 
 		// depth 0: injection recursion disabled. Only the markdown frame is

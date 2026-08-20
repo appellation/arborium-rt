@@ -145,8 +145,10 @@ jobs:
   # ── Browser target: web-tree-sitter host (MAIN_MODULE=2) ──────────────────
   # The emscripten MAIN_MODULE that hosts the runtime + grammar SIDE_MODULEs.
   # Pure emcc compile of the arborium-tree-sitter crate's C sources — no Rust,
-  # no patched tree-sitter CLI, no rendered Cargo.toml, no corpus. Runs from
-  # the start in parallel with everything else.
+  # no patched tree-sitter CLI, no corpus. Runs from the start in parallel with
+  # everything else. It does need `apply-patches`: the query-fuel patch adds a
+  # field to TSQueryCursorState that the C sources compiled here must publish,
+  # or the runtime's fuel meter reads a field the host never wrote.
   host-wasm:
     runs-on: ubuntu-latest
     steps:
@@ -175,6 +177,11 @@ jobs:
 
       - name: pnpm install
         run: pnpm install --frozen-lockfile
+
+      # Working-tree-only setup (reset + git apply + render Cargo.toml). The
+      # host's C sources come from the patched arborium-tree-sitter crate.
+      - name: Apply submodule patches
+        run: ./scripts/arborium-rt apply-patches
 
       - name: Build web-tree-sitter host (MAIN_MODULE)
         run: ./scripts/arborium-rt build wasm host

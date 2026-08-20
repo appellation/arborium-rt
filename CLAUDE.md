@@ -148,7 +148,19 @@ modules expose `pub` items so the per-target shim crates can drive them:
   coalesce → theme pipeline. Mirrors `arborium_highlight::HighlighterCore`
   upstream but drops the async `GrammarProvider` because registry lookups
   are just `HashMap` hits. `MAX_INJECTION_DEPTH = 32` is a hard cap against
-  pathological grammars. Both the themed-span and HTML outputs render from
+  pathological grammars. `HIGHLIGHT_FUEL` is the other hard cap: one
+  highlight call gets a fixed pool of **query fuel** (a model of
+  query-cursor work — see the patch notes below) that the primary parse and
+  every injected sub-parse spend from in document order. When it runs dry
+  the walk stops descending and the affected language names come back in
+  `out_of_fuel_languages` alongside the total in `fuel_used`; spans
+  resolved so far are still returned. This bounds a whole document rather
+  than each query, so N injected chain-bomb code blocks cost the pool once,
+  not N times. Fuel replaced a 300 ms wall-clock deadline: the cutoff is now
+  deterministic (same document, same output, loaded CPU or not) but bounds
+  *work*, so sizing the pool for the slowest host that matters is a
+  deliberate calibration — `packages/arborium-rt-wasm/test/fuel.test.mts`
+  pins it. Both the themed-span and HTML outputs render from
   the same resolved span set (`dedup_and_tag` + `coalesce_by_tag`); HTML
   goes through this module's own `tagged_spans_to_html` rather than
   `arborium_highlight::spans_to_html`, because the upstream renderer dedups
@@ -343,10 +355,17 @@ Two pinned submodules live under `third_party/`:
 - **`third_party/arborium`** — pinned to a specific commit (commit, not
   tag — `arborium-plugin-runtime` doesn't exist on any released tag yet).
   The root `Cargo.toml` path-deps four crates out of it:
-    - `arborium-plugin-runtime` — unpatched; unpublished upstream.
-    - `arborium-tree-sitter` — **patched** to skip static tree-sitter C
-      linking on emscripten (the MAIN_MODULE resolves those symbols).
-    - `arborium-wire` — unpatched; unpublished upstream.
+    - `arborium-plugin-runtime` — **patched** to meter query work with
+      fuel: the `QueryCursor` progress callback charges each 100-operation
+      tick `FUEL_PER_OPERATION + FUEL_PER_LIVE_STATE × live states` and
+      breaks when the caller's allotment is spent
+      (`parse_with_fuel` / `parse_utf16_with_fuel`). Unpublished upstream.
+    - `arborium-tree-sitter` — **patched** twice: to skip static
+      tree-sitter C linking on emscripten (the MAIN_MODULE resolves those
+      symbols), and to publish the cursor's in-progress match count on
+      `TSQueryCursorState` so the fuel meter can weight by it.
+    - `arborium-wire` — **patched** to carry `fuel_used` / `out_of_fuel`
+      on both `ParseResult` types. Unpublished upstream.
     - `arborium-highlight`, `arborium-theme` — consumed with
       `default-features = false` by the emscripten runtime. Only
       `tag_for_capture` is used from `arborium-theme`; the `toml`
@@ -368,10 +387,22 @@ Two pinned submodules live under `third_party/`:
   which is one-shot per file. The arborium-tree-sitter runtime already
   handles `large_state_count == 0` (every lookup goes through the
   sparse path; cf. `crates/arborium-tree-sitter/src/language.h:78`).
+  Note that **only the CLI** comes from this submodule: the tree-sitter C
+  that actually runs is arborium's vendored copy
+  (`crates/arborium-tree-sitter/src/`), compiled into the MAIN_MODULE host
+  by `build wasm host` and statically into the Node addon by
+  `lib/node/build.rs`. Runtime-behavior patches (e.g. the query-fuel
+  counter) therefore go in `patches/arborium/`, not here.
 
 Patches live as mbox files under `patches/<submodule>/` (`git
-format-patch` output). All current patches are trivial target guards or
-opt-in codegen flags — no logic changes to existing behavior.
+format-patch` output). Most are trivial target guards or opt-in codegen
+flags. The exception is the fuel budget — `patches/tree-sitter/0002` plus
+`patches/arborium/0003` and `0004` — which does change behavior: query
+execution now stops when the caller's fuel allotment is spent, returning
+partial spans. That is the DoS guard against quadratic highlight queries
+(kotlin/swift/javascript chained member access), so it is load-bearing, not
+cosmetic; see `patches/arborium/0004`'s commit message for the cost model
+and the measurements behind its constants.
 
 `./scripts/arborium-rt bootstrap` is **idempotent**: it resets each
 submodule to its pinned SHA, `git apply`s every patch under
